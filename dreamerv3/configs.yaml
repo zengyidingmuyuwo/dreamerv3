@@ -35,6 +35,18 @@ defaults:
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
     dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
+    uavfire:
+      num_nearest: 6
+      circle1_num_uavs: 3
+      circle1_center_csv: ''
+      circle1_points_file: ''
+      circle1_circle_id:
+      circle8_center_csv: ''
+      circle8_points_file: ''
+      circle8_circle_id:
+      elevation_tif: ''
+      elev_threshold: 2000.0
+      obstacle_resolution_m: 50.0
 
   replay:
     size: 5e6
@@ -194,6 +206,20 @@ loconav:
   task: loconav_ant_maze_m
   env.loconav.repeat: 1
   run.train_ratio: 256
+
+uavfire_circle1:
+  task: uavfire_circle1
+  run: {steps: 1.1e6, train_ratio: 256, envs: 4}
+  replay.size: 2e5
+  jax.platform: cpu
+  agent.loss_scales.rec: 0.0
+
+uavfire_circle8:
+  task: uavfire_circle8
+  run: {steps: 1.1e6, train_ratio: 256, envs: 4}
+  replay.size: 2e5
+  jax.platform: cpu
+  agent.loss_scales.rec: 0.0
 
 multicpu:
   batch_size: 12
