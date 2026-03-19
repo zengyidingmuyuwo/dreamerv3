@@ -200,24 +200,24 @@ This is disabled by default for faster training.
 ### 1) 训练 Dreamer（Circle 1）
 
 ```bash
-cd /home/runner/work/dreamerv3/dreamerv3
+cd /path/to/dreamerv3
 python dreamerv3/main.py \
   --configs uavfire_circle1 \
   --logdir ~/logdir/dreamer/uavfire_circle1 \
-  --env.uavfire.circle1_center_csv "E:/lzd/python/贪心圆/111-copilot-process-fire-data-and-cluster/output/circle_1_center.csv" \
-  --env.uavfire.circle1_points_file "E:/lzd/python/贪心圆/111-copilot-process-fire-data-and-cluster/output/circle_1_points.shp"
+  --env.uavfire.circle1_center_csv "/path/to/circle_1_center.csv" \
+  --env.uavfire.circle1_points_file "/path/to/circle_1_points.shp"
 ```
 
 ### 2) 训练 Dreamer（Circle 8，含避障）
 
 ```bash
-cd /home/runner/work/dreamerv3/dreamerv3
+cd /path/to/dreamerv3
 python dreamerv3/main.py \
   --configs uavfire_circle8 \
   --logdir ~/logdir/dreamer/uavfire_circle8 \
-  --env.uavfire.circle8_center_csv "E:/lzd/python/贪心圆/111-copilot-process-fire-data-and-cluster/output/circle_8_center.csv" \
-  --env.uavfire.circle8_points_file "E:/lzd/python/贪心圆/111-copilot-process-fire-data-and-cluster/output/circle_8_points.shp" \
-  --env.uavfire.elevation_tif "E:/lzd/fire data/各种图/数据完整的区域高程图.tif" \
+  --env.uavfire.circle8_center_csv "/path/to/circle_8_center.csv" \
+  --env.uavfire.circle8_points_file "/path/to/circle_8_points.shp" \
+  --env.uavfire.elevation_tif "/path/to/elevation.tif" \
   --env.uavfire.elev_threshold 2000
 ```
 

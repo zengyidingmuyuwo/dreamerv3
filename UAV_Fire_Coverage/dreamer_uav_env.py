@@ -40,12 +40,12 @@ class UAVFire(embodied.Env):
     self._is_obstacle_task = (task == 'circle8')
 
     if task == 'circle1':
-      if circle1_center_csv and circle1_points_file and os.path.exists(circle1_center_csv) and os.path.exists(circle1_points_file):
+      if _has_valid_circle_data(circle1_center_csv, circle1_points_file):
         _, _, radius, fire_points = load_circle_data(
             circle1_center_csv, circle1_points_file, circle_id=circle1_circle_id)
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
-      clusters = _cluster_fire_points(fire_points, int(circle1_num_uavs))
+      clusters = _cluster_fire_points(fire_points, circle1_num_uavs)
       self._envs = [
           UAVFireEnv(fire_points=cluster, radius=radius, num_nearest=num_nearest)
           for cluster in clusters
@@ -54,7 +54,7 @@ class UAVFire(embodied.Env):
     elif task == 'circle8':
       obstacle_map = None
       resolution_m = float(obstacle_resolution_m)
-      if circle8_center_csv and circle8_points_file and os.path.exists(circle8_center_csv) and os.path.exists(circle8_points_file):
+      if _has_valid_circle_data(circle8_center_csv, circle8_points_file):
         lat_c, lon_c, radius, fire_points = load_circle_data(
             circle8_center_csv, circle8_points_file, circle_id=circle8_circle_id)
         if elevation_tif and os.path.exists(elevation_tif):
@@ -182,3 +182,9 @@ def _env_step(env, action):
     obs, rew, terminated, truncated, info = result
     return obs, rew, bool(terminated or truncated), info
   return result
+
+
+def _has_valid_circle_data(center_csv, points_file):
+  return (
+      bool(center_csv) and bool(points_file) and
+      os.path.exists(center_csv) and os.path.exists(points_file))

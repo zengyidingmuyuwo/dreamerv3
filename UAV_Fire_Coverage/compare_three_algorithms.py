@@ -76,7 +76,9 @@ def main():
   args = parser.parse_args()
 
   if not any([args.ppo_log, args.sac_log, args.dreamer_scores]):
-    raise ValueError('Provide at least one of: --ppo_log, --sac_log, --dreamer_scores')
+    raise ValueError(
+        'At least one non-empty path must be provided: '
+        '--ppo_log, --sac_log, or --dreamer_scores')
 
   rows = []
   if args.ppo_log:
