@@ -42,7 +42,8 @@ class UAVFire(embodied.Env):
     if task == 'circle1':
       if _has_valid_circle_data(circle1_center_csv, circle1_points_file):
         _, _, radius, fire_points = load_circle_data(
-            circle1_center_csv, circle1_points_file, circle_id=circle1_circle_id)
+            circle1_center_csv, circle1_points_file,
+            circle_id=_normalize_circle_id(circle1_circle_id))
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
       clusters = _cluster_fire_points(fire_points, circle1_num_uavs)
@@ -56,7 +57,8 @@ class UAVFire(embodied.Env):
       resolution_m = float(obstacle_resolution_m)
       if _has_valid_circle_data(circle8_center_csv, circle8_points_file):
         lat_c, lon_c, radius, fire_points = load_circle_data(
-            circle8_center_csv, circle8_points_file, circle_id=circle8_circle_id)
+            circle8_center_csv, circle8_points_file,
+            circle_id=_normalize_circle_id(circle8_circle_id))
         if elevation_tif and os.path.exists(elevation_tif):
           obstacle_map, resolution_m = load_elevation_obstacle_map(
               elevation_tif,
@@ -188,3 +190,16 @@ def _has_valid_circle_data(center_csv, points_file):
   return (
       bool(center_csv) and bool(points_file) and
       os.path.exists(center_csv) and os.path.exists(points_file))
+
+
+def _normalize_circle_id(circle_id):
+  # We use -1 as the config sentinel for "not provided".
+  # Keep support for '-1' as well in case this class is instantiated directly
+  # from external scripts with string arguments.
+  if circle_id in (-1, '', None):
+    return None
+  if isinstance(circle_id, str):
+    circle_id = circle_id.strip()
+    if circle_id in ('', '-1'):
+      return None
+  return circle_id

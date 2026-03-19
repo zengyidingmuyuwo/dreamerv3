@@ -38,13 +38,13 @@ defaults:
     uavfire:
       num_nearest: 6
       circle1_num_uavs: 3
-      circle1_center_csv: null
-      circle1_points_file: null
-      circle1_circle_id: null
-      circle8_center_csv: null
-      circle8_points_file: null
-      circle8_circle_id: null
-      elevation_tif: null
+      circle1_center_csv: ''
+      circle1_points_file: ''
+      circle1_circle_id: -1
+      circle8_center_csv: ''
+      circle8_points_file: ''
+      circle8_circle_id: -1
+      elevation_tif: ''
       elev_threshold: 2000.0
       obstacle_resolution_m: 50.0
 
