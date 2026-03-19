@@ -190,6 +190,58 @@ This is disabled by default for faster training.
 
 ---
 
+## Dreamer（世界模型）接入 Circle 1 / Circle 8
+
+已经将 Dreamer 环境接入到 `UAV_Fire_Coverage` 目录，并复用与 PPO/SAC 相同的数据加载逻辑：
+
+- Circle 1：火点遍历（按 3 个子簇轮换 episode，等价于 3 架无人机任务）
+- Circle 8：火点遍历 + 障碍物避障（海拔 ≥ 2000m 作为障碍）
+
+### 1) 训练 Dreamer（Circle 1）
+
+```bash
+cd /path/to/dreamerv3
+python dreamerv3/main.py \
+  --configs uavfire_circle1 \
+  --logdir ~/logdir/dreamer/uavfire_circle1 \
+  --env.uavfire.circle1_center_csv "/path/to/circle_1_center.csv" \
+  --env.uavfire.circle1_points_file "/path/to/circle_1_points.shp"
+```
+
+### 2) 训练 Dreamer（Circle 8，含避障）
+
+```bash
+cd /path/to/dreamerv3
+python dreamerv3/main.py \
+  --configs uavfire_circle8 \
+  --logdir ~/logdir/dreamer/uavfire_circle8 \
+  --env.uavfire.circle8_center_csv "/path/to/circle_8_center.csv" \
+  --env.uavfire.circle8_points_file "/path/to/circle_8_points.shp" \
+  --env.uavfire.elevation_tif "/path/to/elevation.tif" \
+  --env.uavfire.elev_threshold 2000
+```
+
+说明：
+- 如果路径文件不存在，会自动回退到 `sample_data` 风格的合成数据（便于代码调试）。
+- Dreamer 环境实现文件：`UAV_Fire_Coverage/dreamer_uav_env.py`
+
+### 3) 三种算法结果对比（PPO / SAC / Dreamer）
+
+新增对比脚本：
+
+```bash
+python UAV_Fire_Coverage/compare_three_algorithms.py \
+  --ppo_log /path/to/ppo_train.log \
+  --sac_log /path/to/sac_train.log \
+  --dreamer_scores /path/to/dreamer/logdir/scores.jsonl
+```
+
+它会输出：
+- PPO/SAC：coverage 与 total_reward 的均值和末次值（从训练日志中提取）
+- Dreamer：`episode/score` 的均值和末次值（从 `scores.jsonl` 读取）
+
+---
+
 ## Key command-line arguments
 
 | Argument | Default | Description |
