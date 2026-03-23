@@ -22,9 +22,17 @@ class PlanResult:
 class DronePlanner:
     """Global planner: pairwise A* cost matrix + greedy TSP + dense waypoints."""
 
-    def __init__(self, obstacle_map: Optional[np.ndarray] = None, resolution_m: float = 50.0):
+    def __init__(
+        self,
+        obstacle_map: Optional[np.ndarray] = None,
+        resolution_m: float = 50.0,
+        waypoint_spacing_m: float = 50.0,
+        max_line_steps: int = 10000,
+    ):
         self.obstacle_map = None if obstacle_map is None else np.asarray(obstacle_map, dtype=bool)
         self.resolution_m = float(resolution_m)
+        self.waypoint_spacing_m = float(max(1.0, waypoint_spacing_m))
+        self.max_line_steps = int(max_line_steps)
         if self.obstacle_map is not None:
             self._h, self._w = self.obstacle_map.shape
             self._cx, self._cy = self._w // 2, self._h // 2
@@ -66,11 +74,16 @@ class DronePlanner:
         seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
         return path, float(seg.sum()) if len(seg) else 0.0
 
-    def _line_path(self, start: np.ndarray, goal: np.ndarray, spacing_m: float = 20.0) -> np.ndarray:
+    def _line_path(self, start: np.ndarray, goal: np.ndarray, spacing_m: Optional[float] = None) -> np.ndarray:
         dist = float(np.linalg.norm(goal - start))
         if dist < 1e-6:
             return np.asarray([start], dtype=np.float32)
-        steps = max(2, int(math.ceil(dist / max(spacing_m, 1.0))) + 1)
+        spacing = self.waypoint_spacing_m if spacing_m is None else float(max(1.0, spacing_m))
+        steps = max(2, int(math.ceil(dist / spacing)) + 1)
+        if steps > self.max_line_steps:
+            raise ValueError(
+                f"Steps太大了: {steps}，请检查start {start} 和 goal {goal} 的坐标系是否一致！"
+            )
         t = np.linspace(0.0, 1.0, steps, dtype=np.float32)[:, None]
         return (start[None, :] + (goal - start)[None, :] * t).astype(np.float32)
 

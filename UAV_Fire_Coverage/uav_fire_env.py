@@ -72,6 +72,7 @@ class UAVFireEnv(gym.Env):
     PENALTY_OFF_PATH         = -8.0
     OFF_PATH_DIST_M          = 600.0
     WAYPOINT_REACH_M         = 120.0
+    MAX_ALLOWED_RADIUS_M     = 2_000_000.0
 
     def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
         """
@@ -92,6 +93,7 @@ class UAVFireEnv(gym.Env):
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
         self.n_fire       = len(self.fire_points)
+        self._validate_coordinate_scale()
 
         # State dimension: 5 base + 3 per nearest fire point
         self.state_dim = 5 + self.num_nearest * 3
@@ -124,6 +126,20 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint_idx = 0
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
+
+    def _validate_coordinate_scale(self):
+        if self.n_fire == 0:
+            return
+        norms = np.linalg.norm(self.fire_points.astype(np.float64), axis=1)
+        p95 = float(np.percentile(norms, 95))
+        if (self.radius <= 0) or (self.radius > self.MAX_ALLOWED_RADIUS_M):
+            raise ValueError(
+                f"radius={self.radius} 异常，疑似坐标系不一致（应为米尺度局部坐标）。"
+            )
+        if p95 > self.MAX_ALLOWED_RADIUS_M:
+            raise ValueError(
+                f"fire_points 尺度异常（p95={p95:.1f}），疑似把经纬度/UTM混用到了环境输入。"
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
 

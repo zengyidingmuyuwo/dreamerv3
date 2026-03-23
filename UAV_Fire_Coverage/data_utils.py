@@ -183,6 +183,44 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
     -------
     points : np.ndarray, shape (N, 2), dtype float32
     """
+    # Preferred path: geopandas can read CRS and safely transform to WGS84.
+    try:
+        import geopandas as gpd
+        from pyproj import Transformer
+        gdf = gpd.read_file(filepath)
+        if gdf.empty:
+            return np.zeros((0, 2), dtype=np.float32)
+        gdf = gdf[gdf.geometry.notnull()].copy()
+        if gdf.empty:
+            return np.zeros((0, 2), dtype=np.float32)
+        if gdf.crs is None:
+            # Fallback heuristic: if values look like projected metres, keep as metre coords.
+            xy = np.array([(geom.x, geom.y) for geom in gdf.geometry], dtype=np.float64)
+            x_abs = np.nanmedian(np.abs(xy[:, 0]))
+            y_abs = np.nanmedian(np.abs(xy[:, 1]))
+            if x_abs > 1e4 or y_abs > 1e4:
+                centre = np.array([np.nanmedian(xy[:, 0]), np.nanmedian(xy[:, 1])], dtype=np.float64)
+                return (xy - centre[None, :]).astype(np.float32)
+            # Otherwise assume lon/lat
+            lon = xy[:, 0]
+            lat = xy[:, 1]
+            out = [latlon_to_local(la, lo, lat_center, lon_center) for la, lo in zip(lat, lon)]
+            return np.asarray(out, dtype=np.float32)
+        if gdf.crs.is_geographic:
+            lon = gdf.geometry.x.to_numpy(dtype=np.float64)
+            lat = gdf.geometry.y.to_numpy(dtype=np.float64)
+            out = [latlon_to_local(la, lo, lat_center, lon_center) for la, lo in zip(lat, lon)]
+            return np.asarray(out, dtype=np.float32)
+        # Projected CRS (meter): transform center lon/lat into this CRS and compute local meter offsets.
+        to_proj = Transformer.from_crs("EPSG:4326", gdf.crs, always_xy=True)
+        cx, cy = to_proj.transform(float(lon_center), float(lat_center))
+        x = gdf.geometry.x.to_numpy(dtype=np.float64)
+        y = gdf.geometry.y.to_numpy(dtype=np.float64)
+        pts = np.column_stack([x - cx, y - cy]).astype(np.float32)
+        return pts
+    except Exception:
+        pass
+
     try:
         import shapefile  # pyshp
     except ImportError:
@@ -192,16 +230,19 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
             print(f"[data_utils] pyshp not available; loading {csv_path} instead.")
             return load_fire_points_csv(csv_path, lat_center, lon_center)
         raise ImportError(
-            "pyshp is required to read .shp files. "
-            "Install it with:  pip install pyshp\n"
+            "geopandas/pyproj or pyshp is required to read .shp files. "
+            "Install one of:\n"
+            "  pip install geopandas pyproj\n"
+            "  pip install pyshp\n"
             f"Alternatively, place a CSV at {csv_path}."
         )
 
     points = []
     with shapefile.Reader(filepath) as sf:
         for shape in sf.shapes():
-            lon, lat = shape.points[0]  # Point geometry: (x=lon, y=lat)
-            e, n = latlon_to_local(lat, lon, lat_center, lon_center)
+            x, y = shape.points[0]
+            # pyshp path has no reliable CRS info, so treat as lon/lat legacy input.
+            e, n = latlon_to_local(y, x, lat_center, lon_center)
             points.append([e, n])
     return np.array(points, dtype=np.float32)
 
