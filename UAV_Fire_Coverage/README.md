@@ -188,6 +188,46 @@ To change the save directory, use `--save_dir <path>`.
 Add `--render` to any training command to enable real-time matplotlib visualisation.
 This is disabled by default for faster training.
 
+For paper figures (global planner vs actual trajectory), use:
+
+```bash
+cd UAV_Fire_Coverage
+python render_trajectory.py --save_path trajectory_plot.png
+```
+
+With real data:
+
+```bash
+python render_trajectory.py \
+  --center_csv "你的circle中心csv路径" \
+  --points_file "你的火点shp/csv路径" \
+  --elevation_tif "你的高程tif路径" \
+  --save_path trajectory_plot.png
+```
+
+The output image includes:
+- obstacle heatmap (`>2000m` no-fly region),
+- A* + TSP global guide path (dashed),
+- executed local trajectory (solid),
+- fire points (star markers).
+
+---
+
+## 新手操作步骤（通俗版）
+
+1. **先准备数据**（没有真实数据也可以直接跑样例）  
+   - Circle8 推荐提供：`center_csv`、`points_file`、`elevation_tif`。  
+2. **训练算法**  
+   - PPO: `python ppo_uav_circle8.py`  
+   - SAC: `python sac_uav_circle8.py`  
+   现在环境会自动先做全局 A*+TSP 规划，再给 RL “指南针向量”引导。  
+3. **DreamerV3 训练**  
+   - `python ../dreamerv3/main.py --configs uavfire --task uavfire_circle8`  
+   - Dreamer 输入是字典观测：`{'image': ..., 'vector': [dx, dy]}`。  
+4. **出图写论文**  
+   - `python render_trajectory.py --save_path trajectory_plot.png`  
+   - 直接用生成的图展示：全局虚线 vs 实际实线。  
+
 ---
 
 ## Key command-line arguments

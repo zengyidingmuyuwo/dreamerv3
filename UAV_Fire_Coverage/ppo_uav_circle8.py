@@ -41,7 +41,9 @@ from data_utils import (load_circle_data, load_elevation_obstacle_map,
 def env_reset(env):
     result = env.reset()
     if isinstance(result, tuple):
-        return result[0]
+        result = result[0]
+    if isinstance(result, dict):
+        return np.concatenate([result['image'], result['vector']]).astype(np.float32)
     return result
 
 
@@ -49,8 +51,12 @@ def env_step(env, action):
     result = env.step(action)
     if len(result) == 5:
         obs, rew, terminated, truncated, info = result
-        return obs, rew, terminated or truncated, info
-    return result
+        done = terminated or truncated
+    else:
+        obs, rew, done, info = result
+    if isinstance(obs, dict):
+        obs = np.concatenate([obs['image'], obs['vector']]).astype(np.float32)
+    return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description='PPO — Circle 8 fire coverage + obstacle avoidance')

@@ -38,6 +38,8 @@ except ImportError:
     from gym import spaces
     _GYM_TUPLE_5 = False  # classic gym step() returns (obs, rew, done, info)
 
+from global_planner import DronePlanner
+
 
 class UAVFireEnv(gym.Env):
     """Single fixed-wing UAV fire-point coverage environment."""
@@ -65,8 +67,13 @@ class UAVFireEnv(gym.Env):
                                 # nearest unvisited fire point (normalised by
                                 # STEP_SIZE so one straight-line approach step
                                 # yields exactly REWARD_APPROACH)
+    REWARD_WAYPOINT_APPROACH = 0.15
+    REWARD_WAYPOINT_REACHED  = 3.0
+    PENALTY_OFF_PATH         = -8.0
+    OFF_PATH_DIST_M          = 600.0
+    WAYPOINT_REACH_M         = 120.0
 
-    def __init__(self, fire_points, radius, num_nearest=6):
+    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
         """
         Parameters
         ----------
@@ -83,19 +90,27 @@ class UAVFireEnv(gym.Env):
         self.fire_points  = np.asarray(fire_points, dtype=np.float32)
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
+        self.return_dict_obs = bool(return_dict_obs)
         self.n_fire       = len(self.fire_points)
 
         # State dimension: 5 base + 3 per nearest fire point
         self.state_dim = 5 + self.num_nearest * 3
+        self.vector_dim = 2
 
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(1,), dtype=np.float32
         )
-        self.observation_space = spaces.Box(
-            low=-1.0, high=1.0,
-            shape=(self.state_dim,),
-            dtype=np.float32
-        )
+        if self.return_dict_obs:
+            self.observation_space = spaces.Dict({
+                'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
+                'vector': spaces.Box(low=-1.0, high=1.0, shape=(self.vector_dim,), dtype=np.float32),
+            })
+        else:
+            self.observation_space = spaces.Box(
+                low=-1.0, high=1.0,
+                shape=(self.state_dim + self.vector_dim,),
+                dtype=np.float32
+            )
 
         # Internal state (initialised in reset)
         self.pos     = np.zeros(2, dtype=np.float32)
@@ -104,6 +119,11 @@ class UAVFireEnv(gym.Env):
         self.step_count = 0
         self._done = False
         self._trajectory = []   # for rendering
+        self._planner = DronePlanner(obstacle_map=None, resolution_m=50.0)
+        self.waypoints = np.zeros((0, 2), dtype=np.float32)
+        self.current_waypoint_idx = 0
+        self.current_waypoint = None
+        self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -131,6 +151,7 @@ class UAVFireEnv(gym.Env):
         self._done      = False
         self._trajectory = [self.pos.copy()]
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
+        self._plan_waypoints()
         obs = self._get_obs()
         if _GYM_TUPLE_5:
             return obs, {}
@@ -160,9 +181,13 @@ class UAVFireEnv(gym.Env):
         reward  += self._check_visits()
         reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
+        reward  += self._waypoint_reward()
+        off_path = self._is_off_path()
+        if off_path:
+            self._done = True
 
         # ── Termination ──────────────────────────────────────────────────────
-        done = bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._done = done
@@ -172,6 +197,7 @@ class UAVFireEnv(gym.Env):
             'total_fire_points': self.n_fire,
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
+            'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
@@ -239,7 +265,57 @@ class UAVFireEnv(gym.Env):
             [remaining_ratio],
             nearest_feat,
         ]).astype(np.float32)
-        return obs
+        vec = self._waypoint_vector()
+        if self.return_dict_obs:
+            return {'image': obs, 'vector': vec}
+        return np.concatenate([obs, vec]).astype(np.float32)
+
+    def _plan_waypoints(self):
+        result = self._planner.plan(self.pos, self.fire_points)
+        self.waypoints = result.waypoints
+        self._global_plan_path = result.waypoints
+        self.current_waypoint_idx = 0
+        self.current_waypoint = (
+            self.waypoints[0].copy() if len(self.waypoints) else self.pos.copy()
+        )
+        self._prev_wp_dist = self._dist_to_waypoint()
+
+    def _dist_to_waypoint(self):
+        if self.current_waypoint is None:
+            return 0.0
+        return float(np.linalg.norm(self.current_waypoint - self.pos))
+
+    def _waypoint_vector(self):
+        if self.current_waypoint is None:
+            return np.zeros(2, dtype=np.float32)
+        rel = (self.current_waypoint - self.pos) / max(self.radius, 1.0)
+        return np.clip(rel.astype(np.float32), -1.0, 1.0)
+
+    def _advance_waypoint(self):
+        if self.current_waypoint_idx + 1 < len(self.waypoints):
+            self.current_waypoint_idx += 1
+            self.current_waypoint = self.waypoints[self.current_waypoint_idx].copy()
+            return True
+        return False
+
+    def _waypoint_reward(self):
+        if self.current_waypoint is None:
+            return 0.0
+        cur = self._dist_to_waypoint()
+        dense = self.REWARD_WAYPOINT_APPROACH * (self._prev_wp_dist - cur) / max(self.STEP_SIZE, 1e-6)
+        shaped = float(dense)
+        if cur <= self.WAYPOINT_REACH_M:
+            shaped += self.REWARD_WAYPOINT_REACHED
+            moved = self._advance_waypoint()
+            if moved:
+                cur = self._dist_to_waypoint()
+        if cur > self.OFF_PATH_DIST_M:
+            shaped += self.PENALTY_OFF_PATH
+        self._prev_wp_dist = cur
+        return shaped
+
+    def _is_off_path(self):
+        return self.current_waypoint is not None and self._dist_to_waypoint() > self.OFF_PATH_DIST_M
 
     def _nearest_fire_features(self):
         """Return (dist, sin_angle, cos_angle) for the K nearest unvisited pts."""

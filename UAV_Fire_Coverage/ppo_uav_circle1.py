@@ -48,7 +48,9 @@ def env_reset(env):
     """Reset the environment; return only the observation (numpy array)."""
     result = env.reset()
     if isinstance(result, tuple):   # gymnasium returns (obs, info)
-        return result[0]
+        result = result[0]
+    if isinstance(result, dict):
+        return np.concatenate([result['image'], result['vector']]).astype(np.float32)
     return result                   # classic gym returns obs directly
 
 
@@ -57,8 +59,12 @@ def env_step(env, action):
     result = env.step(action)
     if len(result) == 5:            # gymnasium: obs, rew, terminated, truncated, info
         obs, rew, terminated, truncated, info = result
-        return obs, rew, terminated or truncated, info
-    return result                   # classic gym: obs, rew, done, info
+        done = terminated or truncated
+    else:
+        obs, rew, done, info = result
+    if isinstance(obs, dict):
+        obs = np.concatenate([obs['image'], obs['vector']]).astype(np.float32)
+    return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description='PPO — Circle 1 multi-UAV fire coverage')

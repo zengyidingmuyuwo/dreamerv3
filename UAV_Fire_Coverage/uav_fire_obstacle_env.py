@@ -28,6 +28,7 @@ except ImportError:
     _GYM_TUPLE_5 = False
 
 from uav_fire_env import UAVFireEnv
+from global_planner import DronePlanner
 
 
 class UAVFireObstacleEnv(UAVFireEnv):
@@ -43,7 +44,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     def __init__(self, fire_points, radius,
                  obstacle_map=None, resolution_m=50.0,
-                 num_nearest=6):
+                 num_nearest=6, return_dict_obs=False):
         """
         Parameters
         ----------
@@ -60,6 +61,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             fire_points=fire_points,
             radius=radius,
             num_nearest=num_nearest,
+            return_dict_obs=return_dict_obs,
         )
 
         self.obstacle_map  = obstacle_map   # (H, W) bool or None
@@ -68,14 +70,16 @@ class UAVFireObstacleEnv(UAVFireEnv):
         # Extend state dimension with NUM_SENSORS obstacle distances
         extra = self.NUM_SENSORS
         self.state_dim += extra
-
-        self.observation_space = spaces.Box(
-            low=np.concatenate([
-                np.full(self.state_dim - extra, -1.0),
-                np.zeros(extra),             # sensor distances in [0, 1]
-            ]).astype(np.float32),
-            high=np.ones(self.state_dim, dtype=np.float32),
-        )
+        self._planner = DronePlanner(obstacle_map=self.obstacle_map, resolution_m=self.resolution_m)
+        if self.return_dict_obs:
+            self.observation_space = spaces.Dict({
+                'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
+                'vector': spaces.Box(low=-1.0, high=1.0, shape=(self.vector_dim,), dtype=np.float32),
+            })
+        else:
+            self.observation_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(self.state_dim + self.vector_dim,), dtype=np.float32
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -86,6 +90,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._at_obstacle(self.pos):
             self.pos = np.zeros(2, dtype=np.float32)
             self._prev_min_dist = self._min_dist_to_nearest()
+            self._plan_waypoints()
+            if _GYM_TUPLE_5:
+                return self._get_obs(), {}
+            return self._get_obs()
         return result
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -132,8 +140,12 @@ class UAVFireObstacleEnv(UAVFireEnv):
         reward  += self._check_visits()
         reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
+        reward  += self._waypoint_reward()
+        off_path = self._is_off_path()
+        if off_path:
+            self._done = True
 
-        done = bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._done = done
@@ -144,6 +156,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
             'collision': False,
+            'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
@@ -154,6 +167,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
     def _get_obs(self):
         base_obs = super()._get_obs()
         sensors  = self._obstacle_sensors()
+        if self.return_dict_obs:
+            img = np.concatenate([base_obs['image'], sensors]).astype(np.float32)
+            return {'image': img, 'vector': base_obs['vector']}
         return np.concatenate([base_obs, sensors]).astype(np.float32)
 
     # ─────────────────────────────────────────────────────────────────────────
