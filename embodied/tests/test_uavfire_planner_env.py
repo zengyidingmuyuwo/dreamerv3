@@ -35,7 +35,7 @@ def test_obstacle_env_dict_obs_contains_vector():
   obs = out[0] if isinstance(out, tuple) else out
   assert isinstance(obs, dict)
   assert 'image' in obs and 'vector' in obs
-  assert obs['vector'].shape == (2,)
+  assert obs['vector'].shape == (4,)
   step_out = env.step(np.array([0.0], dtype=np.float32))
   info = step_out[-1]
   assert 'off_path' in info

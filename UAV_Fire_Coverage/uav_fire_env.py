@@ -23,6 +23,11 @@ State vector (23-dimensional by default with num_nearest=6)
             sin(angle_k)
             cos(angle_k)
 
+Guidance vector (4-dimensional)
+-------------------------------
+Relative position of current and lookahead waypoint:
+  [cur_dx, cur_dy, next_dx, next_dy], each normalised by region radius.
+
 Action space
 ------------
 Scalar continuous: Δθ ∈ [-1, 1]  (scaled by MAX_TURN_RATE inside step())
@@ -58,7 +63,7 @@ class UAVFireEnv(gym.Env):
 
     # ── Rewards ───────────────────────────────────────────────────────────────
     REWARD_STEP       = -0.05   # time penalty per step
-    REWARD_VISIT      = 20.0    # per fire point visited
+    REWARD_VISIT      = 100.0   # per fire point visited
     REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
                                 # the circle which is sufficient boundary enforcement
@@ -67,11 +72,12 @@ class UAVFireEnv(gym.Env):
                                 # nearest unvisited fire point (normalised by
                                 # STEP_SIZE so one straight-line approach step
                                 # yields exactly REWARD_APPROACH)
-    REWARD_WAYPOINT_APPROACH = 0.15
-    REWARD_WAYPOINT_REACHED  = 3.0
-    PENALTY_OFF_PATH         = -8.0
+    REWARD_WAYPOINT_PROGRESS = 0.2
+    REWARD_WAYPOINT_REACHED  = 10.0
+    PENALTY_OFF_PATH         = 0.0
     OFF_PATH_DIST_M          = 600.0
-    WAYPOINT_REACH_M         = 120.0
+    WAYPOINT_REACH_M         = 80.0
+    HARD_BOUNDARY_FACTOR     = 2.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
 
     def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
@@ -97,7 +103,7 @@ class UAVFireEnv(gym.Env):
 
         # State dimension: 5 base + 3 per nearest fire point
         self.state_dim = 5 + self.num_nearest * 3
-        self.vector_dim = 2
+        self.vector_dim = 4
 
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(1,), dtype=np.float32
@@ -126,6 +132,7 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint_idx = 0
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
+        self._prev_pos = self.pos.copy()
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -166,6 +173,7 @@ class UAVFireEnv(gym.Env):
         self.step_count = 0
         self._done      = False
         self._trajectory = [self.pos.copy()]
+        self._prev_pos = self.pos.copy()
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
@@ -185,9 +193,11 @@ class UAVFireEnv(gym.Env):
         delta = float(np.asarray(action).flat[0])
         delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
+        self._prev_pos = self.pos.copy()
         self.pos = self.pos + self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
+        hard_out = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
         self._trajectory.append(self.pos.copy())
         self.step_count += 1
 
@@ -199,11 +209,9 @@ class UAVFireEnv(gym.Env):
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         off_path = self._is_off_path()
-        if off_path:
-            self._done = True
 
         # ── Termination ──────────────────────────────────────────────────────
-        done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or hard_out or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._done = done
@@ -303,8 +311,14 @@ class UAVFireEnv(gym.Env):
 
     def _waypoint_vector(self):
         if self.current_waypoint is None:
-            return np.zeros(2, dtype=np.float32)
-        rel = (self.current_waypoint - self.pos) / max(self.radius, 1.0)
+            return np.zeros(4, dtype=np.float32)
+        cur_rel = (self.current_waypoint - self.pos) / max(self.radius, 1.0)
+        if self.current_waypoint_idx + 1 < len(self.waypoints):
+            next_wp = self.waypoints[self.current_waypoint_idx + 1]
+            next_rel = (next_wp - self.pos) / max(self.radius, 1.0)
+        else:
+            next_rel = np.zeros(2, dtype=np.float32)
+        rel = np.concatenate([cur_rel, next_rel], axis=0)
         return np.clip(rel.astype(np.float32), -1.0, 1.0)
 
     def _advance_waypoint(self):
@@ -317,14 +331,22 @@ class UAVFireEnv(gym.Env):
     def _waypoint_reward(self):
         if self.current_waypoint is None:
             return 0.0
+        to_wp_prev = self.current_waypoint - self._prev_pos
+        dist_prev = float(np.linalg.norm(to_wp_prev))
+        if dist_prev > 1e-6:
+            unit = to_wp_prev / dist_prev
+            step_vec = self.pos - self._prev_pos
+            progress = max(0.0, float(np.dot(step_vec, unit)))
+        else:
+            progress = 0.0
+        shaped = float(self.REWARD_WAYPOINT_PROGRESS * progress / max(self.STEP_SIZE, 1e-6))
         cur = self._dist_to_waypoint()
-        dense = self.REWARD_WAYPOINT_APPROACH * (self._prev_wp_dist - cur) / max(self.STEP_SIZE, 1e-6)
-        shaped = float(dense)
-        if cur <= self.WAYPOINT_REACH_M:
+        while cur <= self.WAYPOINT_REACH_M:
             shaped += self.REWARD_WAYPOINT_REACHED
             moved = self._advance_waypoint()
-            if moved:
-                cur = self._dist_to_waypoint()
+            if not moved:
+                break
+            cur = self._dist_to_waypoint()
         if cur > self.OFF_PATH_DIST_M:
             shaped += self.PENALTY_OFF_PATH
         self._prev_wp_dist = cur

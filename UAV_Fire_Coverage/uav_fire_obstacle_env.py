@@ -142,8 +142,6 @@ class UAVFireObstacleEnv(UAVFireEnv):
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         off_path = self._is_off_path()
-        if off_path:
-            self._done = True
 
         done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
