@@ -62,7 +62,7 @@ class UAVFireEnv(gym.Env):
     MAX_STEPS     = 3000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
-    REWARD_STEP       = -0.05   # time penalty per step
+    REWARD_STEP       = -1.0    # per-step energy/time penalty to discourage orbiting
     REWARD_VISIT      = 100.0   # per fire point visited
     REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
@@ -72,11 +72,13 @@ class UAVFireEnv(gym.Env):
                                 # nearest unvisited fire point (normalised by
                                 # STEP_SIZE so one straight-line approach step
                                 # yields exactly REWARD_APPROACH)
-    REWARD_WAYPOINT_PROGRESS = 0.2
+    REWARD_WAYPOINT_POTENTIAL = 0.2
     REWARD_WAYPOINT_REACHED  = 10.0
     PENALTY_OFF_PATH         = 0.0
     OFF_PATH_DIST_M          = 600.0
     WAYPOINT_REACH_M         = 80.0
+    WAYPOINT_TIMEOUT_NEAR_M  = 200.0
+    WAYPOINT_TIMEOUT_STEPS   = 300
     HARD_BOUNDARY_FACTOR     = 2.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
 
@@ -132,7 +134,7 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint_idx = 0
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
-        self._prev_pos = self.pos.copy()
+        self.steps_since_last_waypoint = 0
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -173,7 +175,7 @@ class UAVFireEnv(gym.Env):
         self.step_count = 0
         self._done      = False
         self._trajectory = [self.pos.copy()]
-        self._prev_pos = self.pos.copy()
+        self.steps_since_last_waypoint = 0
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
@@ -193,7 +195,6 @@ class UAVFireEnv(gym.Env):
         delta = float(np.asarray(action).flat[0])
         delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        self._prev_pos = self.pos.copy()
         self.pos = self.pos + self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
@@ -303,6 +304,7 @@ class UAVFireEnv(gym.Env):
             self.waypoints[0].copy() if len(self.waypoints) else self.pos.copy()
         )
         self._prev_wp_dist = self._dist_to_waypoint()
+        self.steps_since_last_waypoint = 0
 
     def _dist_to_waypoint(self):
         if self.current_waypoint is None:
@@ -331,22 +333,25 @@ class UAVFireEnv(gym.Env):
     def _waypoint_reward(self):
         if self.current_waypoint is None:
             return 0.0
-        to_wp_prev = self.current_waypoint - self._prev_pos
-        dist_prev = float(np.linalg.norm(to_wp_prev))
-        if dist_prev > 1e-6:
-            unit = to_wp_prev / dist_prev
-            step_vec = self.pos - self._prev_pos
-            progress = max(0.0, float(np.dot(step_vec, unit)))
-        else:
-            progress = 0.0
-        shaped = float(self.REWARD_WAYPOINT_PROGRESS * progress / max(self.STEP_SIZE, 1e-6))
+        old_dist = float(self._prev_wp_dist)
         cur = self._dist_to_waypoint()
-        while cur <= self.WAYPOINT_REACH_M:
+        self.steps_since_last_waypoint += 1
+        shaped = float(self.REWARD_WAYPOINT_POTENTIAL * (old_dist - cur))
+        near_and_diverging = (
+            (cur <= self.WAYPOINT_TIMEOUT_NEAR_M) and (cur > old_dist + 1e-6)
+        )
+        timed_out = self.steps_since_last_waypoint > self.WAYPOINT_TIMEOUT_STEPS
+        while (cur <= self.WAYPOINT_REACH_M) or near_and_diverging or timed_out:
             shaped += self.REWARD_WAYPOINT_REACHED
             moved = self._advance_waypoint()
+            self.steps_since_last_waypoint = 0
             if not moved:
+                self.current_waypoint = None
+                cur = 0.0
                 break
             cur = self._dist_to_waypoint()
+            near_and_diverging = False
+            timed_out = False
         if cur > self.OFF_PATH_DIST_M:
             shaped += self.PENALTY_OFF_PATH
         self._prev_wp_dist = cur
