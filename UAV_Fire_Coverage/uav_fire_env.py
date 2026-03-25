@@ -79,6 +79,7 @@ class UAVFireEnv(gym.Env):
     WAYPOINT_REACH_M         = 80.0
     WAYPOINT_TIMEOUT_NEAR_M  = 200.0
     WAYPOINT_TIMEOUT_STEPS   = 300
+    WAYPOINT_DIVERGE_EPS     = 1e-6
     HARD_BOUNDARY_FACTOR     = 2.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
 
@@ -338,7 +339,7 @@ class UAVFireEnv(gym.Env):
         self.steps_since_last_waypoint += 1
         shaped = float(self.REWARD_WAYPOINT_POTENTIAL * (old_dist - cur))
         near_and_diverging = (
-            (cur <= self.WAYPOINT_TIMEOUT_NEAR_M) and (cur > old_dist + 1e-6)
+            (cur <= self.WAYPOINT_TIMEOUT_NEAR_M) and (cur > old_dist + self.WAYPOINT_DIVERGE_EPS)
         )
         timed_out = self.steps_since_last_waypoint > self.WAYPOINT_TIMEOUT_STEPS
         while (cur <= self.WAYPOINT_REACH_M) or near_and_diverging or timed_out:
