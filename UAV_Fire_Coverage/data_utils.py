@@ -48,6 +48,36 @@ def local_to_latlon(east_m, north_m, lat_center, lon_center):
     return float(lat), float(lon)
 
 
+def infer_utm_epsg(lon_center, lat_center):
+    """Infer UTM EPSG code from WGS84 center coordinates."""
+    zone = int((float(lon_center) + 180.0) // 6.0) + 1
+    zone = min(max(zone, 1), 60)
+    base = 32600 if float(lat_center) >= 0 else 32700
+    return base + zone
+
+
+def local_offsets_from_projected_xy(xy, lat_center, lon_center):
+    """Convert projected absolute XY points to local XY (meters) around center.
+
+    The center is transformed from WGS84 into an inferred local UTM CRS and then
+    subtracted from all projected XY points.
+    """
+    arr = np.asarray(xy, dtype=np.float64)
+    if arr.size == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    try:
+        from pyproj import Transformer
+        epsg = infer_utm_epsg(lon_center, lat_center)
+        to_proj = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+        cx, cy = to_proj.transform(float(lon_center), float(lat_center))
+        return (arr - np.array([cx, cy], dtype=np.float64)[None, :]).astype(np.float32)
+    except Exception:
+        # Last-resort fallback to keep points numerically local if CRS toolchain
+        # is unavailable; center-relative path above remains preferred.
+        centre = np.array([np.nanmedian(arr[:, 0]), np.nanmedian(arr[:, 1])], dtype=np.float64)
+        return (arr - centre[None, :]).astype(np.float32)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CSV loaders
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,13 +224,13 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
         if gdf.empty:
             return np.zeros((0, 2), dtype=np.float32)
         if gdf.crs is None:
-            # Fallback heuristic: if values look like projected metres, keep as metre coords.
+            # If values look projected (meters), convert center into inferred UTM
+            # and subtract center to build local coordinates.
             xy = np.array([(geom.x, geom.y) for geom in gdf.geometry], dtype=np.float64)
             x_abs = np.nanmedian(np.abs(xy[:, 0]))
             y_abs = np.nanmedian(np.abs(xy[:, 1]))
             if x_abs > 1e4 or y_abs > 1e4:
-                centre = np.array([np.nanmedian(xy[:, 0]), np.nanmedian(xy[:, 1])], dtype=np.float64)
-                return (xy - centre[None, :]).astype(np.float32)
+                return local_offsets_from_projected_xy(xy, lat_center, lon_center)
             # Otherwise assume lon/lat
             lon = xy[:, 0]
             lat = xy[:, 1]
@@ -237,14 +267,22 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
             f"Alternatively, place a CSV at {csv_path}."
         )
 
-    points = []
+    xy = []
     with shapefile.Reader(filepath) as sf:
         for shape in sf.shapes():
             x, y = shape.points[0]
-            # pyshp path has no reliable CRS info, so treat as lon/lat legacy input.
-            e, n = latlon_to_local(y, x, lat_center, lon_center)
-            points.append([e, n])
-    return np.array(points, dtype=np.float32)
+            xy.append([x, y])
+    if not xy:
+        return np.zeros((0, 2), dtype=np.float32)
+    xy = np.asarray(xy, dtype=np.float64)
+    x_abs = np.nanmedian(np.abs(xy[:, 0]))
+    y_abs = np.nanmedian(np.abs(xy[:, 1]))
+    if x_abs > 1e4 or y_abs > 1e4:
+        # Projected-meter legacy SHP without CRS metadata.
+        return local_offsets_from_projected_xy(xy, lat_center, lon_center)
+    # Assume lon/lat legacy input.
+    out = [latlon_to_local(y, x, lat_center, lon_center) for x, y in xy]
+    return np.asarray(out, dtype=np.float32)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
