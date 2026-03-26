@@ -16,6 +16,7 @@ to obtain synthetic datasets that match the expected format.
 import os
 import csv
 import math
+import warnings
 import numpy as np
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -74,6 +75,11 @@ def local_offsets_from_projected_xy(xy, lat_center, lon_center):
     except Exception:
         # Last-resort fallback to keep points numerically local if CRS toolchain
         # is unavailable; center-relative path above remains preferred.
+        warnings.warn(
+            "Falling back to median-centered projected coordinates because center CRS "
+            "transformation failed; local origin may not match circle center exactly.",
+            RuntimeWarning,
+        )
         centre = np.array([np.nanmedian(arr[:, 0]), np.nanmedian(arr[:, 1])], dtype=np.float64)
         return (arr - centre[None, :]).astype(np.float32)
 
