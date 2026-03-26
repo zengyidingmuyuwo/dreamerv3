@@ -62,7 +62,9 @@ def convert_coordinates(csv_path, shp_path, name):
 
 if __name__ == "__main__":
     # 定义基础路径
-    base_dir = r"E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_dir = os.path.dirname(script_dir)
+    base_dir = os.path.join(repo_dir, "prepare")
 
     # 圆一文件路径
     circle1_csv = os.path.join(base_dir, "circle_1_center.csv")

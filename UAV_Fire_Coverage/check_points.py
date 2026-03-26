@@ -1,6 +1,10 @@
 import geopandas as gpd
+import os
 
-shp_path = r"E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_points.shp"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+PREPARE_DIR = os.path.join(BASE_DIR, "prepare")
+shp_path = os.path.join(PREPARE_DIR, "circle_1_points.shp")
 gdf = gpd.read_file(shp_path)
 
 print("\n🔍 火点数据检查结果：")

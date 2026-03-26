@@ -11,9 +11,9 @@ Usage
 
 # Train with your own data files:
     python ppo_uav_circle8.py \
-        --center_csv  "E:/lzd/.../circle_8_center.csv" \
-        --points_file "E:/lzd/.../circle_8_points.shp" \
-        --elevation_tif "E:/lzd/fire data/.../数据完整的区域高程图.tif"
+        --center_csv  "/path/to/prepare/circle_8_center.csv" \
+        --points_file "/path/to/prepare/circle_8_points.shp" \
+        --elevation_tif "/path/to/prepare/elevation/your_dem.tif"
 
 # Resume (load saved model):
     python ppo_uav_circle8.py --load
@@ -59,18 +59,22 @@ def env_step(env, action):
     return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+PREPARE_DIR = os.path.join(BASE_DIR, 'prepare')
+
 parser = argparse.ArgumentParser(description='PPO — Circle 8 fire coverage + obstacle avoidance')
 parser.add_argument('--center_csv',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_center.csv',
+    default=os.path.join(PREPARE_DIR, 'circle_8_center.csv'),
     type=str, help='Circle-8 centre CSV (columns: circle_id, center_x, center_y, radius_m, diameter_m)')
 parser.add_argument('--circle_id',
     default=None, type=int,
     help='circle_id value to select from the centre CSV (default: first row)')
 parser.add_argument('--points_file',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_points.shp',
+    default=os.path.join(PREPARE_DIR, 'circle_8_points.shp'),
     type=str, help='Circle-8 fire-point SHP or CSV file')
 parser.add_argument('--elevation_tif',
-    default=r'E:\lzd\fire data\各种图\数据完整的区域高程图.tif',
+    default='',
     type=str, help='DEM GeoTIFF; pixels ≥ elev_threshold are obstacles')
 parser.add_argument('--elev_threshold', default=2000.0, type=float)
 parser.add_argument('--gamma',         default=0.99, type=float)
@@ -88,6 +92,14 @@ parser.add_argument('--render',        action='store_true')
 parser.add_argument('--load',          action='store_true')
 parser.add_argument('--save_dir',      default='./ppo_circle8_model', type=str)
 args = parser.parse_args()
+if not args.elevation_tif:
+    elev_dir = os.path.join(PREPARE_DIR, 'elevation')
+    if os.path.isdir(elev_dir):
+        tif_candidates = sorted(
+            f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff'))
+        )
+        if tif_candidates:
+            args.elevation_tif = os.path.join(elev_dir, tif_candidates[0])
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 Transition = namedtuple('Transition', ['s', 'a', 'a_log_p', 'r', 's_'])

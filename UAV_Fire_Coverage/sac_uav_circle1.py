@@ -17,8 +17,8 @@ Usage
 
 # Train with your own data files:
     python sac_uav_circle1.py \
-        --center_csv  "E:/lzd/.../circle_1_center.csv" \
-        --points_file "E:/lzd/.../circle_1_points.shp"
+        --center_csv  "/path/to/prepare/circle_1_center.csv" \
+        --points_file "/path/to/prepare/circle_1_points.shp"
 
 # Resume (load saved model):
     python sac_uav_circle1.py --load
@@ -62,15 +62,19 @@ def env_step(env, action):
     return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+PREPARE_DIR = os.path.join(BASE_DIR, 'prepare')
+
 parser = argparse.ArgumentParser(description='SAC — Circle 1 multi-UAV fire coverage')
 parser.add_argument('--center_csv',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_center.csv',
+    default=os.path.join(PREPARE_DIR, 'circle_1_center.csv'),
     type=str, help='Circle-1 centre CSV (columns: circle_id, center_x, center_y, radius_m, diameter_m)')
 parser.add_argument('--circle_id',
     default=None, type=int,
     help='circle_id value to select from the centre CSV (default: first row)')
 parser.add_argument('--points_file',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_points.shp',
+    default=os.path.join(PREPARE_DIR, 'circle_1_points.shp'),
     type=str, help='Circle-1 fire-point SHP or CSV file')
 parser.add_argument('--num_uavs',     default=3,  type=int)
 parser.add_argument('--gamma',        default=0.99, type=float)
