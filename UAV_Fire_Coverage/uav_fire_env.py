@@ -82,6 +82,9 @@ class UAVFireEnv(gym.Env):
     WAYPOINT_DIVERGE_EPS     = 1e-6
     HARD_BOUNDARY_FACTOR     = 2.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
+    WIND_GUST_AMPLITUDE_M_S  = 5.0
+    WIND_GUST_FREQUENCY      = 0.05
+    WIND_NOISE_STDDEV_M_S    = 0.5
 
     def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
         """
@@ -136,6 +139,8 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
         self.steps_since_last_waypoint = 0
+        self._best_ep_score = -float('inf')
+        self._current_ep_score = 0.0
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -177,6 +182,7 @@ class UAVFireEnv(gym.Env):
         self._done      = False
         self._trajectory = [self.pos.copy()]
         self.steps_since_last_waypoint = 0
+        self._current_ep_score = 0.0
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
@@ -196,9 +202,19 @@ class UAVFireEnv(gym.Env):
         delta = float(np.asarray(action).flat[0])
         delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        self.pos = self.pos + self.STEP_SIZE * np.array(
+        control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
+        wind_vx = (
+            self.WIND_GUST_AMPLITUDE_M_S * np.sin(self.step_count * self.WIND_GUST_FREQUENCY)
+            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
+        )
+        wind_vy = (
+            self.WIND_GUST_AMPLITUDE_M_S * np.cos(self.step_count * self.WIND_GUST_FREQUENCY)
+            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
+        )
+        wind_displacement = np.array([wind_vx, wind_vy], dtype=np.float32) * self.DT
+        self.pos = self.pos + control_displacement + wind_displacement
         hard_out = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
         self._trajectory.append(self.pos.copy())
         self.step_count += 1
@@ -216,6 +232,10 @@ class UAVFireEnv(gym.Env):
         done = self._done or hard_out or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
+        self._current_ep_score += float(reward)
+        if done and self._current_ep_score > self._best_ep_score:
+            self._best_ep_score = self._current_ep_score
+            self._save_best_trajectory(float(np.sum(self.visited)) / self.n_fire)
         self._done = done
 
         info = {
@@ -228,6 +248,40 @@ class UAVFireEnv(gym.Env):
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
         return self._get_obs(), float(reward), done, info
+
+    def _save_best_trajectory(self, coverage_rate):
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+        except ImportError:
+            return
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
+
+        unv = self.fire_points[~self.visited]
+        vis = self.fire_points[self.visited]
+        if len(unv):
+            ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
+        if len(vis):
+            ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
+
+        if len(self._trajectory) > 1:
+            traj = np.array(self._trajectory, dtype=np.float32)
+            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+
+        lim = self.radius * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect('equal')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.set_title(
+            f'Best Episode Trajectory | score={self._current_ep_score:.2f} | '
+            f'coverage={coverage_rate * 100:.1f}%'
+        )
+        fig.savefig('best_trajectory_record.png', dpi=300)
+        plt.close(fig)
+        print(f'New best trajectory saved with score: {self._current_ep_score:.2f}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
