@@ -71,3 +71,19 @@ def test_obstacle_env_uses_circle8_naming_and_tracks_wind():
   assert best_files
   for name in created:
     os.remove(os.path.join(out_dir, name))
+
+
+def test_obstacle_env_reset_starts_at_center():
+  fire_points = np.array([[100.0, 100.0], [200.0, 0.0]], dtype=np.float32)
+  env = UAVFireObstacleEnv(
+      fire_points=fire_points,
+      radius=2000.0,
+      obstacle_map=np.zeros((64, 64), dtype=bool),
+      resolution_m=50.0,
+      return_dict_obs=True,
+      env_name='Circle8',
+  )
+  out = env.reset(seed=123)
+  obs = out[0] if isinstance(out, tuple) else out
+  assert isinstance(obs, dict)
+  np.testing.assert_allclose(env.pos, np.array([0.0, 0.0], dtype=np.float32), atol=1e-8)

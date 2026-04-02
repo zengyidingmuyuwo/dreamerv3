@@ -273,7 +273,12 @@ class UAVFireObstacleEnv(UAVFireEnv):
                 -H // 2 * self.resolution_m,
                 H // 2 * self.resolution_m,
             ]
-            ax.imshow(self.obstacle_map, cmap='Greys', alpha=0.45, extent=ext, origin='upper', zorder=0)
+            obs_float = self.obstacle_map.astype(np.float32)
+            ax.contourf(
+                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=0.35,
+                extent=ext, origin='upper', zorder=0
+            )
+            ax.imshow(obs_float, cmap='Greys', alpha=0.25, extent=ext, origin='upper', zorder=0)
             obs_y, obs_x = np.where(self.obstacle_map)
             if len(obs_x):
                 x_coords = (obs_x - (W // 2)) * self.resolution_m
@@ -345,7 +350,12 @@ class UAVFireObstacleEnv(UAVFireEnv):
             H, W = self.obstacle_map.shape
             ext = [-W // 2 * self.resolution_m, W // 2 * self.resolution_m,
                    -H // 2 * self.resolution_m, H // 2 * self.resolution_m]
-            ax.imshow(self.obstacle_map, cmap='Reds', alpha=0.35,
+            obs_float = self.obstacle_map.astype(np.float32)
+            ax.contourf(
+                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=0.35,
+                extent=ext, origin='upper', zorder=0
+            )
+            ax.imshow(obs_float, cmap='Greys', alpha=0.25,
                       extent=ext, origin='upper', zorder=0)
 
         # Boundary circle

@@ -40,6 +40,16 @@ class UAVFire(embodied.Env):
         obstacle_map, resolution_m = load_elevation_obstacle_map(
             elevation_tif, lat_c, lon_c, region_radius_m=radius,
             elevation_threshold=elev_threshold, target_resolution_m=resolution_m)
+      elif task == 'circle8':
+        elev_dir = os.path.join(ROOT, 'prepare', 'elevation')
+        if os.path.isdir(elev_dir):
+          tif_candidates = sorted(
+              f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff')))
+          if tif_candidates:
+            tif_path = os.path.join(elev_dir, tif_candidates[0])
+            obstacle_map, resolution_m = load_elevation_obstacle_map(
+                tif_path, lat_c, lon_c, region_radius_m=radius,
+                elevation_threshold=elev_threshold, target_resolution_m=resolution_m)
     else:
       if task == 'circle8':
         (_, _, radius), fire_points, obstacle_map, resolution_m = generate_sample_circle8_data()

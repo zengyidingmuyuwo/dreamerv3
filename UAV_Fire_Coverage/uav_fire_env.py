@@ -176,19 +176,8 @@ class UAVFireEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)
 
-        # ── Start near the centroid of fire points (much faster than always
-        #    starting at the origin, which can be far from all fire points) ───
-        centroid = (self.fire_points.mean(axis=0).astype(np.float32)
-                    if self.n_fire > 0 else np.zeros(2, dtype=np.float32))
-        jitter_r = min(self.VISIT_RADIUS * 2.0, self.radius * 0.25)
-        angle    = np.random.uniform(0.0, 2.0 * np.pi)
-        dist     = np.random.uniform(0.0, jitter_r)
-        self.pos = centroid + dist * np.array(
-            [np.cos(angle), np.sin(angle)], dtype=np.float32)
-        # Clamp into the circular region
-        d = float(np.linalg.norm(self.pos))
-        if d > self.radius * 0.9:
-            self.pos = self.pos * (self.radius * 0.9 / d)
+        # ── Strict unified start: all UAVs launch from the same center point ──
+        self.pos = np.zeros(2, dtype=np.float32)
 
         self.heading = np.random.uniform(0.0, 2.0 * np.pi)
         self.visited    = np.zeros(self.n_fire, dtype=bool)

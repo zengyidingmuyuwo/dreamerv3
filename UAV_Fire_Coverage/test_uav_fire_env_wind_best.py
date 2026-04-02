@@ -70,3 +70,17 @@ def test_max_steps_and_hard_boundary_relaxed():
   )
   assert env.MAX_STEPS == 5000
   assert env.HARD_BOUNDARY_FACTOR == 3.0
+
+
+def test_reset_starts_exactly_at_center_without_random_offset():
+  env = UAVFireEnv(
+      fire_points=np.array([[1000.0, 200.0], [1100.0, -150.0]], dtype=np.float32),
+      radius=5000.0,
+  )
+  out1 = env.reset(seed=1)
+  obs1 = out1[0] if isinstance(out1, tuple) else out1
+  np.testing.assert_allclose(env.pos, np.array([0.0, 0.0], dtype=np.float32), atol=1e-8)
+  out2 = env.reset(seed=999)
+  obs2 = out2[0] if isinstance(out2, tuple) else out2
+  np.testing.assert_allclose(env.pos, np.array([0.0, 0.0], dtype=np.float32), atol=1e-8)
+  assert obs1 is not None and obs2 is not None
