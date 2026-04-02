@@ -17,6 +17,7 @@ Additional rewards / penalties
   PENALTY_PROXIMITY  — proportional to closeness to nearest obstacle
 """
 
+import os
 import numpy as np
 try:
     import gymnasium as gym
@@ -71,6 +72,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         extra = self.NUM_SENSORS
         self.state_dim += extra
         self._planner = DronePlanner(obstacle_map=self.obstacle_map, resolution_m=self.resolution_m)
+        os.makedirs('trajectory_results', exist_ok=True)
         if self.return_dict_obs:
             self.observation_space = spaces.Dict({
                 'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
@@ -108,9 +110,19 @@ class UAVFireObstacleEnv(UAVFireEnv):
         delta = float(np.asarray(action).flat[0])
         delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        self.pos = self.pos + self.STEP_SIZE * np.array(
+        control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
+        wind_vx = (
+            self.WIND_GUST_AMPLITUDE_M_S * np.sin(self.step_count * self.WIND_GUST_FREQUENCY)
+            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
+        )
+        wind_vy = (
+            self.WIND_GUST_AMPLITUDE_M_S * np.cos(self.step_count * self.WIND_GUST_FREQUENCY)
+            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
+        )
+        wind_displacement = np.array([wind_vx, wind_vy], dtype=np.float32) * self.DT
+        self.pos = self.pos + control_displacement + wind_displacement
         self._trajectory.append(self.pos.copy())
         self.step_count += 1
 
@@ -119,6 +131,8 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._at_obstacle(self.pos):
             reward += self.PENALTY_COLLISION
             self._done = True
+            self._current_ep_score += float(reward)
+            self._finalize_episode_record(float(np.sum(self.visited)) / self.n_fire)
             info = {
                 'visited_count': int(np.sum(self.visited)),
                 'total_fire_points': self.n_fire,
@@ -146,6 +160,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
         done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
+        self._current_ep_score += float(reward)
+        if done:
+            self._finalize_episode_record(float(np.sum(self.visited)) / self.n_fire)
         self._done = done
 
         info = {
@@ -159,6 +176,34 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
         return self._get_obs(), float(reward), done, info
+
+    def _finalize_episode_record(self, coverage_rate):
+        self._episode_count += 1
+        class_name = self.__class__.__name__
+        pid = os.getpid()
+        score_int = int(self._current_ep_score)
+        if self._episode_count == 1:
+            initial_path = os.path.join(
+                'trajectory_results',
+                f'initial_{class_name}_PID{pid}_score_{score_int}.png',
+            )
+            self._save_trajectory_snapshot(
+                save_path=initial_path,
+                coverage_rate=coverage_rate,
+                title_prefix='Initial Episode Trajectory',
+            )
+        if self._current_ep_score > self._best_ep_score:
+            self._best_ep_score = self._current_ep_score
+            best_path = os.path.join(
+                'trajectory_results',
+                f'best_{class_name}_PID{pid}_score_{score_int}.png',
+            )
+            self._save_trajectory_snapshot(
+                save_path=best_path,
+                coverage_rate=coverage_rate,
+                title_prefix='Best Episode Trajectory',
+            )
+            print(f'New best trajectory saved with score: {self._current_ep_score:.2f}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -215,6 +260,50 @@ class UAVFireObstacleEnv(UAVFireEnv):
             return self.MAX_SENSOR_RANGE
         sensors = self._obstacle_sensors()
         return float(np.min(sensors) * self.MAX_SENSOR_RANGE)
+
+    def _save_trajectory_snapshot(self, save_path, coverage_rate, title_prefix):
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+        except ImportError:
+            return
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+        if self.obstacle_map is not None:
+            H, W = self.obstacle_map.shape
+            ext = [
+                -W // 2 * self.resolution_m,
+                W // 2 * self.resolution_m,
+                -H // 2 * self.resolution_m,
+                H // 2 * self.resolution_m,
+            ]
+            ax.imshow(self.obstacle_map, cmap='Greys', alpha=0.45, extent=ext, origin='upper', zorder=0)
+
+        ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
+
+        unv = self.fire_points[~self.visited]
+        vis = self.fire_points[self.visited]
+        if len(unv):
+            ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
+        if len(vis):
+            ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
+
+        if len(self._trajectory) > 1:
+            traj = np.array(self._trajectory, dtype=np.float32)
+            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+
+        lim = self.radius * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect('equal')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.set_title(
+            f'{title_prefix} | score={self._current_ep_score:.2f} | '
+            f'coverage={coverage_rate * 100:.1f}%'
+        )
+        plt.savefig(save_path, dpi=300)
+        plt.close(fig)
 
     # ─────────────────────────────────────────────────────────────────────────
 

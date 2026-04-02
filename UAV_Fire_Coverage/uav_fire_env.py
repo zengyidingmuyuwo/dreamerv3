@@ -33,6 +33,7 @@ Action space
 Scalar continuous: Δθ ∈ [-1, 1]  (scaled by MAX_TURN_RATE inside step())
 """
 
+import os
 import numpy as np
 try:
     import gymnasium as gym
@@ -139,7 +140,9 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
         self.steps_since_last_waypoint = 0
+        os.makedirs('trajectory_results', exist_ok=True)
         self._best_ep_score = -float('inf')
+        self._episode_count = 0
         self._current_ep_score = 0.0
 
     def _validate_coordinate_scale(self):
@@ -233,9 +236,34 @@ class UAVFireEnv(gym.Env):
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._current_ep_score += float(reward)
-        if done and self._current_ep_score > self._best_ep_score:
-            self._best_ep_score = self._current_ep_score
-            self._save_best_trajectory(float(np.sum(self.visited)) / self.n_fire)
+        if done:
+            self._episode_count += 1
+            coverage_rate = float(np.sum(self.visited)) / self.n_fire
+            class_name = self.__class__.__name__
+            pid = os.getpid()
+            score_int = int(self._current_ep_score)
+            if self._episode_count == 1:
+                initial_path = os.path.join(
+                    'trajectory_results',
+                    f'initial_{class_name}_PID{pid}_score_{score_int}.png',
+                )
+                self._save_trajectory_snapshot(
+                    save_path=initial_path,
+                    coverage_rate=coverage_rate,
+                    title_prefix='Initial Episode Trajectory',
+                )
+            if self._current_ep_score > self._best_ep_score:
+                self._best_ep_score = self._current_ep_score
+                best_path = os.path.join(
+                    'trajectory_results',
+                    f'best_{class_name}_PID{pid}_score_{score_int}.png',
+                )
+                self._save_trajectory_snapshot(
+                    save_path=best_path,
+                    coverage_rate=coverage_rate,
+                    title_prefix='Best Episode Trajectory',
+                )
+                print(f'New best trajectory saved with score: {self._current_ep_score:.2f}')
         self._done = done
 
         info = {
@@ -249,7 +277,7 @@ class UAVFireEnv(gym.Env):
             return self._get_obs(), float(reward), done, False, info
         return self._get_obs(), float(reward), done, info
 
-    def _save_best_trajectory(self, coverage_rate):
+    def _save_trajectory_snapshot(self, save_path, coverage_rate, title_prefix):
         try:
             import matplotlib.pyplot as plt
             import matplotlib.patches as mpatches
@@ -276,12 +304,11 @@ class UAVFireEnv(gym.Env):
         ax.set_aspect('equal')
         ax.legend(loc='upper right', fontsize=8)
         ax.set_title(
-            f'Best Episode Trajectory | score={self._current_ep_score:.2f} | '
+            f'{title_prefix} | score={self._current_ep_score:.2f} | '
             f'coverage={coverage_rate * 100:.1f}%'
         )
-        fig.savefig('best_trajectory_record.png', dpi=300)
+        plt.savefig(save_path, dpi=300)
         plt.close(fig)
-        print(f'New best trajectory saved with score: {self._current_ep_score:.2f}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
