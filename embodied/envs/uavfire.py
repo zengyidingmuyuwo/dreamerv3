@@ -49,10 +49,12 @@ class UAVFire(embodied.Env):
     if task == 'circle8':
       self._env = UAVFireObstacleEnv(
           fire_points=fire_points, radius=radius, obstacle_map=obstacle_map,
-          resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True)
+          resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
+          algorithm_name='DREAMER')
     else:
       self._env = UAVFireEnv(
-          fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True)
+          fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
+          algorithm_name='DREAMER')
 
   @property
   def obs_space(self):
