@@ -60,7 +60,7 @@ class UAVFireEnv(gym.Env):
 
     # ── Task parameters ───────────────────────────────────────────────────────
     VISIT_RADIUS  = 200.0  # m  — fire point considered "visited" within this range
-    MAX_STEPS     = 3000   # maximum steps per episode
+    MAX_STEPS     = 5000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
     REWARD_STEP       = -1.0    # per-step energy/time penalty to discourage orbiting
@@ -81,14 +81,19 @@ class UAVFireEnv(gym.Env):
     WAYPOINT_TIMEOUT_NEAR_M  = 200.0
     WAYPOINT_TIMEOUT_STEPS   = 300
     WAYPOINT_DIVERGE_EPS     = 1e-6
-    HARD_BOUNDARY_FACTOR     = 2.0
+    HARD_BOUNDARY_FACTOR     = 3.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
-    WIND_GUST_AMPLITUDE_M_S  = 5.0
-    WIND_GUST_FREQUENCY      = 0.05
-    WIND_NOISE_STDDEV_M_S    = 0.5
+    WIND_BASE_M_S            = 4.0
+    WIND_GUST_AMPLITUDE_M_S  = 8.0
+    WIND_GUST_FREQUENCY      = 0.08
+    WIND_SPATIAL_AMPLITUDE_M_S = 3.5
+    WIND_SPATIAL_SCALE_M     = 400.0
+    WIND_NOISE_STDDEV_M_S    = 1.8
+    WIND_GUST_AR_COEF        = 0.82
+    WIND_GUST_STDDEV_M_S     = 1.5
     TRAJECTORY_RESULTS_DIR   = 'trajectory_results'
 
-    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False, algorithm_name='RL'):
+    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False, algorithm_name='RL', env_name=None):
         """
         Parameters
         ----------
@@ -107,6 +112,7 @@ class UAVFireEnv(gym.Env):
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
         self.algorithm_name = str(algorithm_name).upper()
+        self.env_name = str(env_name) if env_name else self.__class__.__name__
         self.n_fire       = len(self.fire_points)
         self._validate_coordinate_scale()
 
@@ -146,6 +152,8 @@ class UAVFireEnv(gym.Env):
         self._best_ep_score = -float('inf')
         self._episode_count = 0
         self._current_ep_score = 0.0
+        self._wind_history = []
+        self._wind_state = np.zeros(2, dtype=np.float32)
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -188,6 +196,8 @@ class UAVFireEnv(gym.Env):
         self._trajectory = [self.pos.copy()]
         self.steps_since_last_waypoint = 0
         self._current_ep_score = 0.0
+        self._wind_history = []
+        self._wind_state = np.zeros(2, dtype=np.float32)
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
@@ -210,15 +220,8 @@ class UAVFireEnv(gym.Env):
         control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
-        wind_vx = (
-            self.WIND_GUST_AMPLITUDE_M_S * np.sin(self.step_count * self.WIND_GUST_FREQUENCY)
-            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
-        )
-        wind_vy = (
-            self.WIND_GUST_AMPLITUDE_M_S * np.cos(self.step_count * self.WIND_GUST_FREQUENCY)
-            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
-        )
-        wind_displacement = np.array([wind_vx, wind_vy], dtype=np.float32) * self.DT
+        wind_velocity = self._compute_wind_velocity()
+        wind_displacement = wind_velocity * self.DT
         self.pos = self.pos + control_displacement + wind_displacement
         outside_hard_boundary = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
         self._trajectory.append(self.pos.copy())
@@ -246,7 +249,7 @@ class UAVFireEnv(gym.Env):
             if self._episode_count == 1:
                 initial_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'initial_{self.algorithm_name}_{class_name}_PID{pid}.png',
+                    f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=initial_path,
@@ -257,7 +260,7 @@ class UAVFireEnv(gym.Env):
                 self._best_ep_score = self._current_ep_score
                 best_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'best_{self.algorithm_name}_{class_name}_PID{pid}.png',
+                    f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=best_path,
@@ -298,6 +301,23 @@ class UAVFireEnv(gym.Env):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory, dtype=np.float32)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+        if self._wind_history:
+            wind_arr = np.array(self._wind_history, dtype=np.float32)
+            wind_mean = np.mean(wind_arr, axis=0)
+            wind_peak = float(np.max(np.linalg.norm(wind_arr, axis=1)))
+            anchor = np.array([-self.radius * 0.9, self.radius * 0.9], dtype=np.float32)
+            ax.quiver(
+                [anchor[0]], [anchor[1]], [wind_mean[0]], [wind_mean[1]],
+                angles='xy', scale_units='xy', scale=1.0,
+                color='darkorange', width=0.007, zorder=6, label='Mean Wind'
+            )
+            ax.text(
+                anchor[0], anchor[1] - self.radius * 0.12,
+                f'Wind mean=({wind_mean[0]:.1f},{wind_mean[1]:.1f}) m/s\n'
+                f'Wind peak={wind_peak:.1f} m/s',
+                color='darkorange', fontsize=9, ha='left', va='top',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='darkorange')
+            )
 
         lim = self.radius * 1.15
         ax.set_xlim(-lim, lim)
@@ -377,6 +397,25 @@ class UAVFireEnv(gym.Env):
         if self.return_dict_obs:
             return {'image': obs, 'vector': vec}
         return np.concatenate([obs, vec]).astype(np.float32)
+
+    def _compute_wind_velocity(self):
+        t = float(self.step_count)
+        px, py = float(self.pos[0]), float(self.pos[1])
+        temporal = np.array([
+            self.WIND_GUST_AMPLITUDE_M_S * np.sin(self.WIND_GUST_FREQUENCY * t),
+            self.WIND_GUST_AMPLITUDE_M_S * np.cos(self.WIND_GUST_FREQUENCY * t * 1.3),
+        ], dtype=np.float32)
+        spatial = np.array([
+            self.WIND_SPATIAL_AMPLITUDE_M_S * np.sin(py / self.WIND_SPATIAL_SCALE_M),
+            self.WIND_SPATIAL_AMPLITUDE_M_S * np.cos(px / self.WIND_SPATIAL_SCALE_M),
+        ], dtype=np.float32)
+        noise = np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S, size=2).astype(np.float32)
+        gust_noise = np.random.normal(0.0, self.WIND_GUST_STDDEV_M_S, size=2).astype(np.float32)
+        self._wind_state = self.WIND_GUST_AR_COEF * self._wind_state + gust_noise
+        base = np.array([self.WIND_BASE_M_S, 0.0], dtype=np.float32)
+        wind_velocity = base + temporal + spatial + noise + self._wind_state
+        self._wind_history.append(wind_velocity.copy())
+        return wind_velocity
 
     def _plan_waypoints(self):
         result = self._planner.plan(self.pos, self.fire_points)

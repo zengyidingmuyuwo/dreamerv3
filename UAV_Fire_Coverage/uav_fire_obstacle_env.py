@@ -45,7 +45,8 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     def __init__(self, fire_points, radius,
                  obstacle_map=None, resolution_m=50.0,
-                 num_nearest=6, return_dict_obs=False, algorithm_name='RL'):
+                 num_nearest=6, return_dict_obs=False, algorithm_name='RL',
+                 env_name=None):
         """
         Parameters
         ----------
@@ -64,6 +65,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             num_nearest=num_nearest,
             return_dict_obs=return_dict_obs,
             algorithm_name=algorithm_name,
+            env_name=env_name,
         )
 
         self.obstacle_map  = obstacle_map   # (H, W) bool or None
@@ -114,15 +116,8 @@ class UAVFireObstacleEnv(UAVFireEnv):
         control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
-        wind_vx = (
-            self.WIND_GUST_AMPLITUDE_M_S * np.sin(self.step_count * self.WIND_GUST_FREQUENCY)
-            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
-        )
-        wind_vy = (
-            self.WIND_GUST_AMPLITUDE_M_S * np.cos(self.step_count * self.WIND_GUST_FREQUENCY)
-            + np.random.normal(0.0, self.WIND_NOISE_STDDEV_M_S)
-        )
-        wind_displacement = np.array([wind_vx, wind_vy], dtype=np.float32) * self.DT
+        wind_velocity = self._compute_wind_velocity()
+        wind_displacement = wind_velocity * self.DT
         self.pos = self.pos + control_displacement + wind_displacement
         self._trajectory.append(self.pos.copy())
         self.step_count += 1
@@ -185,7 +180,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._episode_count == 1:
             initial_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'initial_{self.algorithm_name}_{class_name}_PID{pid}.png',
+                f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=initial_path,
@@ -196,7 +191,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             self._best_ep_score = self._current_ep_score
             best_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'best_{self.algorithm_name}_{class_name}_PID{pid}.png',
+                f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=best_path,
@@ -279,6 +274,12 @@ class UAVFireObstacleEnv(UAVFireEnv):
                 H // 2 * self.resolution_m,
             ]
             ax.imshow(self.obstacle_map, cmap='Greys', alpha=0.45, extent=ext, origin='upper', zorder=0)
+            obs_y, obs_x = np.where(self.obstacle_map)
+            if len(obs_x):
+                x_coords = (obs_x - (W // 2)) * self.resolution_m
+                y_coords = ((H // 2) - obs_y) * self.resolution_m
+                ax.scatter(x_coords, y_coords, c='black', s=4, alpha=0.5, marker='s',
+                           zorder=1, label='Obstacles')
 
         ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
 
@@ -292,6 +293,23 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory, dtype=np.float32)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+        if self._wind_history:
+            wind_arr = np.array(self._wind_history, dtype=np.float32)
+            wind_mean = np.mean(wind_arr, axis=0)
+            wind_peak = float(np.max(np.linalg.norm(wind_arr, axis=1)))
+            anchor = np.array([-self.radius * 0.9, self.radius * 0.9], dtype=np.float32)
+            ax.quiver(
+                [anchor[0]], [anchor[1]], [wind_mean[0]], [wind_mean[1]],
+                angles='xy', scale_units='xy', scale=1.0,
+                color='darkorange', width=0.007, zorder=6, label='Mean Wind'
+            )
+            ax.text(
+                anchor[0], anchor[1] - self.radius * 0.12,
+                f'Wind mean=({wind_mean[0]:.1f},{wind_mean[1]:.1f}) m/s\n'
+                f'Wind peak={wind_peak:.1f} m/s',
+                color='darkorange', fontsize=9, ha='left', va='top',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='darkorange')
+            )
 
         lim = self.radius * 1.15
         ax.set_xlim(-lim, lim)

@@ -257,7 +257,7 @@ def main():
           + '  '.join(f'UAV{i+1}={len(c)}pts' for i, c in enumerate(clusters)))
 
     # ── Create environments ───────────────────────────────────────────────────
-    envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='PPO') for c in clusters]
+    envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='PPO', env_name='Circle1') for c in clusters]
     state_dim  = envs[0].observation_space.shape[0]
     action_dim = envs[0].action_space.shape[0]
     print(f'[PPO Circle1] state_dim={state_dim}  action_dim={action_dim}')

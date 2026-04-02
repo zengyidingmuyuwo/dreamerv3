@@ -15,13 +15,15 @@ def test_step_adds_wind_displacement_with_time_pattern():
   env.step_count = 0
 
   old_normal = np.random.normal
-  np.random.normal = lambda loc=0.0, scale=1.0: 0.0
+  np.random.normal = lambda loc=0.0, scale=1.0, size=None: (
+      np.zeros(size, dtype=np.float32) if size is not None else 0.0
+  )
   try:
     env.step(np.array([0.0], dtype=np.float32))
   finally:
     np.random.normal = old_normal
 
-  expected = np.array([env.STEP_SIZE, 5.0], dtype=np.float32)
+  expected = np.array([env.STEP_SIZE + env.WIND_BASE_M_S, env.WIND_GUST_AMPLITUDE_M_S], dtype=np.float32)
   np.testing.assert_allclose(env.pos, expected, atol=1e-4)
 
 
@@ -34,13 +36,16 @@ def test_best_trajectory_saved_on_new_high_score():
       fire_points=np.array([[0.0, 0.0]], dtype=np.float32),
       radius=5000.0,
       algorithm_name='PPO',
+      env_name='Circle1',
   )
   env.reset(seed=0)
   env.pos = np.array([0.0, 0.0], dtype=np.float32)
   env.heading = 0.0
 
   old_normal = np.random.normal
-  np.random.normal = lambda loc=0.0, scale=1.0: 0.0
+  np.random.normal = lambda loc=0.0, scale=1.0, size=None: (
+      np.zeros(size, dtype=np.float32) if size is not None else 0.0
+  )
   try:
     _, _, done, *_ = env.step(np.array([0.0], dtype=np.float32))
   finally:
@@ -49,7 +54,16 @@ def test_best_trajectory_saved_on_new_high_score():
   assert done
   assert env._best_ep_score > -float('inf')
   created = [name for name in os.listdir(out_dir) if name not in existing]
-  best_files = [name for name in created if name.startswith('best_PPO_UAVFireEnv_PID') and name.endswith('.png')]
+  best_files = [name for name in created if name.startswith('best_PPO_Circle1_PID') and name.endswith('.png')]
   assert best_files
   for name in created:
     os.remove(os.path.join(out_dir, name))
+
+
+def test_max_steps_and_hard_boundary_relaxed():
+  env = UAVFireEnv(
+      fire_points=np.array([[3000.0, 0.0]], dtype=np.float32),
+      radius=5000.0,
+  )
+  assert env.MAX_STEPS == 5000
+  assert env.HARD_BOUNDARY_FACTOR == 3.0

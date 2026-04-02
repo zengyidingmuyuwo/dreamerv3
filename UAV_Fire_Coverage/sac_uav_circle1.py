@@ -320,7 +320,7 @@ def main():
     print(f'[SAC Circle1] {len(clusters)} clusters:  '
           + '  '.join(f'UAV{i+1}={len(c)}pts' for i, c in enumerate(clusters)))
 
-    envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='SAC') for c in clusters]
+    envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='SAC', env_name='Circle1') for c in clusters]
     state_dim  = envs[0].observation_space.shape[0]
     action_dim = envs[0].action_space.shape[0]
     print(f'[SAC Circle1] state_dim={state_dim}  action_dim={action_dim}')
