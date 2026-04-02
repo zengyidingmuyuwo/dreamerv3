@@ -23,7 +23,10 @@ def test_step_adds_wind_displacement_with_time_pattern():
   finally:
     np.random.normal = old_normal
 
-  expected = np.array([env.STEP_SIZE + env.WIND_BASE_M_S, env.WIND_GUST_AMPLITUDE_M_S], dtype=np.float32)
+  expected = np.array([
+      env.STEP_SIZE + env.WIND_BASE_M_S,
+      env.WIND_GUST_AMPLITUDE_M_S + env.WIND_SPATIAL_AMPLITUDE_M_S,
+  ], dtype=np.float32)
   np.testing.assert_allclose(env.pos, expected, atol=1e-4)
 
 

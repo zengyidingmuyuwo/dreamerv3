@@ -49,6 +49,7 @@ from global_planner import DronePlanner
 
 class UAVFireEnv(gym.Env):
     """Single fixed-wing UAV fire-point coverage environment."""
+    _TRAJECTORY_REGISTRY = {}
 
     metadata = {'render.modes': ['human']}
 
@@ -194,6 +195,7 @@ class UAVFireEnv(gym.Env):
         self.step_count = 0
         self._done      = False
         self._trajectory = [self.pos.copy()]
+        self._register_trajectory_for_snapshot()
         self.steps_since_last_waypoint = 0
         self._current_ep_score = 0.0
         self._wind_history = []
@@ -225,6 +227,7 @@ class UAVFireEnv(gym.Env):
         self.pos = self.pos + control_displacement + wind_displacement
         outside_hard_boundary = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
         self._trajectory.append(self.pos.copy())
+        self._register_trajectory_for_snapshot()
         self.step_count += 1
 
         # ── Reward bookkeeping ───────────────────────────────────────────────
@@ -298,9 +301,20 @@ class UAVFireEnv(gym.Env):
         if len(vis):
             ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
 
-        if len(self._trajectory) > 1:
+        if self.env_name.lower() != 'circle1' and len(self._trajectory) > 1:
             traj = np.array(self._trajectory, dtype=np.float32)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+        if self.env_name.lower() == 'circle1':
+            group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
+            ids = sorted(group.keys())
+            colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
+            for idx, env_id in enumerate(ids):
+                tr = np.asarray(group[env_id], dtype=np.float32)
+                if len(tr) <= 1:
+                    continue
+                color = colors[idx % len(colors)]
+                ax.plot(tr[:, 0], tr[:, 1], '-', lw=1.5, alpha=0.85, color=color,
+                        label=f'UAV{idx + 1} Trajectory')
         if self._wind_history:
             wind_arr = np.array(self._wind_history, dtype=np.float32)
             wind_mean = np.mean(wind_arr, axis=0)
@@ -416,6 +430,14 @@ class UAVFireEnv(gym.Env):
         wind_velocity = base + temporal + spatial + noise + self._wind_state
         self._wind_history.append(wind_velocity.copy())
         return wind_velocity
+
+    def _registry_key(self):
+        return (self.algorithm_name, self.env_name, os.getpid())
+
+    def _register_trajectory_for_snapshot(self):
+        key = self._registry_key()
+        group = self._TRAJECTORY_REGISTRY.setdefault(key, {})
+        group[id(self)] = np.array(self._trajectory, dtype=np.float32)
 
     def _plan_waypoints(self):
         result = self._planner.plan(self.pos, self.fire_points)
