@@ -86,6 +86,7 @@ class UAVFireEnv(gym.Env):
     WIND_GUST_AMPLITUDE_M_S  = 5.0
     WIND_GUST_FREQUENCY      = 0.05
     WIND_NOISE_STDDEV_M_S    = 0.5
+    TRAJECTORY_RESULTS_DIR   = 'trajectory_results'
 
     def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
         """
@@ -140,7 +141,7 @@ class UAVFireEnv(gym.Env):
         self.current_waypoint = None
         self._global_plan_path = np.zeros((0, 2), dtype=np.float32)
         self.steps_since_last_waypoint = 0
-        os.makedirs('trajectory_results', exist_ok=True)
+        os.makedirs(self.TRAJECTORY_RESULTS_DIR, exist_ok=True)
         self._best_ep_score = -float('inf')
         self._episode_count = 0
         self._current_ep_score = 0.0
@@ -218,7 +219,7 @@ class UAVFireEnv(gym.Env):
         )
         wind_displacement = np.array([wind_vx, wind_vy], dtype=np.float32) * self.DT
         self.pos = self.pos + control_displacement + wind_displacement
-        hard_out = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
+        outside_hard_boundary = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
         self._trajectory.append(self.pos.copy())
         self.step_count += 1
 
@@ -232,7 +233,7 @@ class UAVFireEnv(gym.Env):
         off_path = self._is_off_path()
 
         # ── Termination ──────────────────────────────────────────────────────
-        done = self._done or hard_out or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or outside_hard_boundary or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._current_ep_score += float(reward)
@@ -244,7 +245,7 @@ class UAVFireEnv(gym.Env):
             score_int = int(self._current_ep_score)
             if self._episode_count == 1:
                 initial_path = os.path.join(
-                    'trajectory_results',
+                    self.TRAJECTORY_RESULTS_DIR,
                     f'initial_{class_name}_PID{pid}_score_{score_int}.png',
                 )
                 self._save_trajectory_snapshot(
@@ -255,7 +256,7 @@ class UAVFireEnv(gym.Env):
             if self._current_ep_score > self._best_ep_score:
                 self._best_ep_score = self._current_ep_score
                 best_path = os.path.join(
-                    'trajectory_results',
+                    self.TRAJECTORY_RESULTS_DIR,
                     f'best_{class_name}_PID{pid}_score_{score_int}.png',
                 )
                 self._save_trajectory_snapshot(

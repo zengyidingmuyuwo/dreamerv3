@@ -26,9 +26,9 @@ def test_step_adds_wind_displacement_with_time_pattern():
 
 
 def test_best_trajectory_saved_on_new_high_score():
-  out = os.path.abspath('best_trajectory_record.png')
-  if os.path.exists(out):
-    os.remove(out)
+  out_dir = os.path.abspath('trajectory_results')
+  os.makedirs(out_dir, exist_ok=True)
+  existing = set(os.listdir(out_dir))
 
   env = UAVFireEnv(
       fire_points=np.array([[0.0, 0.0]], dtype=np.float32),
@@ -47,6 +47,8 @@ def test_best_trajectory_saved_on_new_high_score():
 
   assert done
   assert env._best_ep_score > -float('inf')
-  assert os.path.exists(out)
-  os.remove(out)
-
+  created = [name for name in os.listdir(out_dir) if name not in existing]
+  best_files = [name for name in created if name.startswith('best_UAVFireEnv_PID') and name.endswith('.png')]
+  assert best_files
+  for name in created:
+    os.remove(os.path.join(out_dir, name))

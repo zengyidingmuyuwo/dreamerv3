@@ -72,7 +72,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         extra = self.NUM_SENSORS
         self.state_dim += extra
         self._planner = DronePlanner(obstacle_map=self.obstacle_map, resolution_m=self.resolution_m)
-        os.makedirs('trajectory_results', exist_ok=True)
+        os.makedirs(self.TRAJECTORY_RESULTS_DIR, exist_ok=True)
         if self.return_dict_obs:
             self.observation_space = spaces.Dict({
                 'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
@@ -184,7 +184,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         score_int = int(self._current_ep_score)
         if self._episode_count == 1:
             initial_path = os.path.join(
-                'trajectory_results',
+                self.TRAJECTORY_RESULTS_DIR,
                 f'initial_{class_name}_PID{pid}_score_{score_int}.png',
             )
             self._save_trajectory_snapshot(
@@ -195,7 +195,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._current_ep_score > self._best_ep_score:
             self._best_ep_score = self._current_ep_score
             best_path = os.path.join(
-                'trajectory_results',
+                self.TRAJECTORY_RESULTS_DIR,
                 f'best_{class_name}_PID{pid}_score_{score_int}.png',
             )
             self._save_trajectory_snapshot(
