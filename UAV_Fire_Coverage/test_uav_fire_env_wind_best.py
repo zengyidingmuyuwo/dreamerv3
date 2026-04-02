@@ -33,6 +33,7 @@ def test_best_trajectory_saved_on_new_high_score():
   env = UAVFireEnv(
       fire_points=np.array([[0.0, 0.0]], dtype=np.float32),
       radius=5000.0,
+      algorithm_name='PPO',
   )
   env.reset(seed=0)
   env.pos = np.array([0.0, 0.0], dtype=np.float32)
@@ -48,7 +49,7 @@ def test_best_trajectory_saved_on_new_high_score():
   assert done
   assert env._best_ep_score > -float('inf')
   created = [name for name in os.listdir(out_dir) if name not in existing]
-  best_files = [name for name in created if name.startswith('best_UAVFireEnv_PID') and name.endswith('.png')]
+  best_files = [name for name in created if name.startswith('best_PPO_UAVFireEnv_PID') and name.endswith('.png')]
   assert best_files
   for name in created:
     os.remove(os.path.join(out_dir, name))

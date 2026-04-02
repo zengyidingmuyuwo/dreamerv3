@@ -88,7 +88,7 @@ class UAVFireEnv(gym.Env):
     WIND_NOISE_STDDEV_M_S    = 0.5
     TRAJECTORY_RESULTS_DIR   = 'trajectory_results'
 
-    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False):
+    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False, algorithm_name='RL'):
         """
         Parameters
         ----------
@@ -106,6 +106,7 @@ class UAVFireEnv(gym.Env):
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
+        self.algorithm_name = str(algorithm_name).upper()
         self.n_fire       = len(self.fire_points)
         self._validate_coordinate_scale()
 
@@ -242,11 +243,10 @@ class UAVFireEnv(gym.Env):
             coverage_rate = float(np.sum(self.visited)) / self.n_fire
             class_name = self.__class__.__name__
             pid = os.getpid()
-            score_int = int(self._current_ep_score)
             if self._episode_count == 1:
                 initial_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'initial_{class_name}_PID{pid}_score_{score_int}.png',
+                    f'initial_{self.algorithm_name}_{class_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=initial_path,
@@ -257,7 +257,7 @@ class UAVFireEnv(gym.Env):
                 self._best_ep_score = self._current_ep_score
                 best_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'best_{class_name}_PID{pid}_score_{score_int}.png',
+                    f'best_{self.algorithm_name}_{class_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=best_path,

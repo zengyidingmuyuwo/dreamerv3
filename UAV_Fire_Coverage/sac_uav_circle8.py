@@ -327,6 +327,7 @@ def main():
         radius=radius,
         obstacle_map=obstacle_map,
         resolution_m=resolution_m,
+        algorithm_name='SAC',
     )
     state_dim  = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]

@@ -45,7 +45,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     def __init__(self, fire_points, radius,
                  obstacle_map=None, resolution_m=50.0,
-                 num_nearest=6, return_dict_obs=False):
+                 num_nearest=6, return_dict_obs=False, algorithm_name='RL'):
         """
         Parameters
         ----------
@@ -63,6 +63,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             radius=radius,
             num_nearest=num_nearest,
             return_dict_obs=return_dict_obs,
+            algorithm_name=algorithm_name,
         )
 
         self.obstacle_map  = obstacle_map   # (H, W) bool or None
@@ -181,11 +182,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
         self._episode_count += 1
         class_name = self.__class__.__name__
         pid = os.getpid()
-        score_int = int(self._current_ep_score)
         if self._episode_count == 1:
             initial_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'initial_{class_name}_PID{pid}_score_{score_int}.png',
+                f'initial_{self.algorithm_name}_{class_name}_PID{pid}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=initial_path,
@@ -196,7 +196,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             self._best_ep_score = self._current_ep_score
             best_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'best_{class_name}_PID{pid}_score_{score_int}.png',
+                f'best_{self.algorithm_name}_{class_name}_PID{pid}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=best_path,
