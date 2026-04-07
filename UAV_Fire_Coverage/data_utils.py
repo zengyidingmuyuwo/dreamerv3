@@ -79,7 +79,8 @@ def local_offsets_from_projected_xy(xy, lat_center, lon_center):
         # is unavailable; center-relative path above remains preferred.
         warnings.warn(
             "Falling back to median-centered projected coordinates because center CRS "
-            "transformation failed; local origin may not match circle center exactly.",
+            "transformation failed; local origin may not match circle center exactly. "
+            "Install pyproj for accurate coordinate transformation: pip install pyproj",
             UserWarning,
         )
         centre = np.array([np.nanmedian(arr[:, 0]), np.nanmedian(arr[:, 1])], dtype=np.float64)
