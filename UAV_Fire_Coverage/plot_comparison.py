@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import matplotlib
 import numpy as np
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 

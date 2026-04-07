@@ -67,7 +67,7 @@ def test_obstacle_env_uses_circle8_naming_and_tracks_wind():
     np.random.normal = old_normal
   assert len(env._wind_history) == 1
   created = [name for name in os.listdir(out_dir) if name not in existing]
-  best_files = [name for name in created if name.startswith('best_SAC_Circle8_PID') and name.endswith('.png')]
+  best_files = [name for name in created if name == 'best_SAC_Circle8.png']
   assert best_files
   for name in created:
     os.remove(os.path.join(out_dir, name))

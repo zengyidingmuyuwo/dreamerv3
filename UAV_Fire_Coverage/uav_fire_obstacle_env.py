@@ -20,6 +20,11 @@ Additional rewards / penalties
 import os
 import numpy as np
 try:
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    matplotlib = None
+try:
     import gymnasium as gym
     from gymnasium import spaces
     _GYM_TUPLE_5 = True
@@ -198,12 +203,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     def _finalize_episode_record(self, coverage_rate):
         self._episode_count += 1
-        class_name = self.__class__.__name__
-        pid = os.getpid()
         if self._episode_count == 1:
             initial_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                f'initial_{self.algorithm_name}_{self.env_name}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=initial_path,
@@ -214,7 +217,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             self._best_ep_score = self._current_ep_score
             best_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                f'best_{self.algorithm_name}_{self.env_name}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=best_path,

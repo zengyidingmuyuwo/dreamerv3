@@ -1,7 +1,9 @@
 import argparse
 import os
 import sys
+import matplotlib
 import numpy as np
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

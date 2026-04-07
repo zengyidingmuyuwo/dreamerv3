@@ -57,7 +57,7 @@ def test_best_trajectory_saved_on_new_high_score():
   assert done
   assert env._best_ep_score > -float('inf')
   created = [name for name in os.listdir(out_dir) if name not in existing]
-  best_files = [name for name in created if name.startswith('best_PPO_Circle1_PID') and name.endswith('.png')]
+  best_files = [name for name in created if name == 'best_PPO_Circle1.png']
   assert best_files
   for name in created:
     os.remove(os.path.join(out_dir, name))
