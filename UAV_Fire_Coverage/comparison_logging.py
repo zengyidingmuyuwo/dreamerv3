@@ -1,6 +1,7 @@
 import csv
 import os
 import time
+from typing import Optional
 
 
 class EpisodeCSVLogger:

@@ -257,7 +257,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
             return None
         try:
             rx, ry = to_raster.transform(lon, lat)
-            from rasterio.transform import rowcol
+            rowcol = meta.get('rowcol')
+            if rowcol is None:
+                return None
             row, col = rowcol(meta['transform'], rx, ry)
             if row < 0 or col < 0 or row >= meta['height'] or col >= meta['width']:
                 return None

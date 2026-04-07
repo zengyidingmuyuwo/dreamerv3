@@ -19,6 +19,7 @@ import math
 import warnings
 import numpy as np
 import zipfile
+import tempfile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Coordinate helpers
@@ -79,7 +80,7 @@ def local_offsets_from_projected_xy(xy, lat_center, lon_center):
         warnings.warn(
             "Falling back to median-centered projected coordinates because center CRS "
             "transformation failed; local origin may not match circle center exactly.",
-            RuntimeWarning,
+            UserWarning,
         )
         centre = np.array([np.nanmedian(arr[:, 0]), np.nanmedian(arr[:, 1])], dtype=np.float64)
         return (arr - centre[None, :]).astype(np.float32)
@@ -308,7 +309,7 @@ def resolve_elevation_raster_path(path):
         return src
     if not lower.endswith('.zip'):
         raise ValueError(f"Unsupported elevation file type: {src}")
-    cache_dir = os.path.join('/tmp', 'dreamerv3_dem_cache')
+    cache_dir = os.path.join(tempfile.gettempdir(), 'dreamerv3_dem_cache')
     os.makedirs(cache_dir, exist_ok=True)
     with zipfile.ZipFile(src, 'r') as zf:
         names = [n for n in zf.namelist() if n.lower().endswith(('.tif', '.tiff'))]
@@ -330,6 +331,7 @@ def build_dem_query_metadata(tif_filepath):
     try:
         import rasterio
         from pyproj import Transformer
+        from rasterio.transform import rowcol
     except ImportError:
         return None
     raster_path = resolve_elevation_raster_path(tif_filepath)
@@ -348,6 +350,7 @@ def build_dem_query_metadata(tif_filepath):
         'height': int(height),
         'nodata': nodata,
         'source_path': raster_path,
+        'rowcol': rowcol,
     }
 
 
