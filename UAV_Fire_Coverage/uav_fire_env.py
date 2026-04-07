@@ -263,7 +263,7 @@ class UAVFireEnv(gym.Env):
             if self._episode_count == 1:
                 initial_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
+                    f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=initial_path,
@@ -274,7 +274,7 @@ class UAVFireEnv(gym.Env):
                 self._best_ep_score = self._current_ep_score
                 best_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'best_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
+                    f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=best_path,
