@@ -38,24 +38,28 @@ class UAVFire(embodied.Env):
     self._episode_steps = 0
     self._total_steps = 0
     use_real = bool(center_csv) and bool(points_file) and os.path.exists(center_csv) and os.path.exists(points_file)
+    lat_c = None
+    lon_c = None
+    dem_query_metadata = None
     if use_real:
       kwargs = {} if circle_id == -1 else {'circle_id': int(circle_id)}
       lat_c, lon_c, radius, fire_points = load_circle_data(center_csv, points_file, **kwargs)
       obstacle_map = None
       if task == 'circle8' and elevation_tif and os.path.exists(elevation_tif):
-        obstacle_map, resolution_m = load_elevation_obstacle_map(
+        obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
             elevation_tif, lat_c, lon_c, region_radius_m=radius,
-            elevation_threshold=elev_threshold, target_resolution_m=resolution_m)
+            elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
+            return_metadata=True)
       elif task == 'circle8':
         elev_dir = os.path.join(ROOT, 'prepare', 'elevation')
         if os.path.isdir(elev_dir):
-          tif_candidates = sorted(
-              f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff')))
+          tif_candidates = sorted(f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff', '.zip')))
           if tif_candidates:
             tif_path = os.path.join(elev_dir, tif_candidates[0])
-            obstacle_map, resolution_m = load_elevation_obstacle_map(
+            obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
                 tif_path, lat_c, lon_c, region_radius_m=radius,
-                elevation_threshold=elev_threshold, target_resolution_m=resolution_m)
+                elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
+                return_metadata=True)
     else:
       if task == 'circle8':
         (_, _, radius), fire_points, obstacle_map, resolution_m = generate_sample_circle8_data()
@@ -66,7 +70,8 @@ class UAVFire(embodied.Env):
       self._env = UAVFireObstacleEnv(
           fire_points=fire_points, radius=radius, obstacle_map=obstacle_map,
           resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
-          algorithm_name='DREAMER', env_name='Circle8')
+          algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
+          elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
     else:
       self._env = UAVFireEnv(
           fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
@@ -74,6 +79,7 @@ class UAVFire(embodied.Env):
     log_dir = os.path.join(UAV_DIR, 'logs')
     scenario_name = 'Circle8' if task == 'circle8' else 'Circle1'
     self._episode_logger = EpisodeCSVLogger('DREAMER', scenario_name, log_dir)
+    print(f'[Dreamer UAVFire] Standard CSV log: {os.path.abspath(self._episode_logger.path)}')
 
   @property
   def obs_space(self):

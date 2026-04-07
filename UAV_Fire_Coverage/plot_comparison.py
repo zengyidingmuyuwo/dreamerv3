@@ -75,19 +75,25 @@ def parse_unified_csv(path: Path) -> RunSeries:
             rows.append(row)
     if not rows:
         raise ValueError(f'Empty CSV: {path}')
-    alg = str(rows[0].get('algorithm', 'UNKNOWN')).upper()
-    scenario = normalize_scenario(rows[0].get('scenario', infer_scenario_from_path(path)))
-    run_id = rows[0].get('run_id', path.stem)
-    rows.sort(key=lambda r: float(r.get('timesteps', 0.0)))
+    def _pick(row, *keys, default=None):
+        for k in keys:
+            if k in row and row[k] not in (None, ''):
+                return row[k]
+        return default
+
+    alg = str(_pick(rows[0], 'algorithm', 'Algorithm', default='UNKNOWN')).upper()
+    scenario = normalize_scenario(_pick(rows[0], 'scenario', 'Scenario', default=infer_scenario_from_path(path)))
+    run_id = _pick(rows[0], 'run_id', 'Run_ID', default=path.stem)
+    rows.sort(key=lambda r: float(_pick(r, 'timesteps', 'Steps', default=0.0)))
     return RunSeries(
         algorithm=alg,
         scenario=scenario,
         run_id=run_id,
-        episode=np.asarray([float(r.get('episode', i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
-        timesteps=np.asarray([float(r.get('timesteps', i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
-        wall_time_sec=np.asarray([float(r.get('wall_time_sec', i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
-        episode_reward=np.asarray([float(r.get('episode_reward', np.nan)) for r in rows], dtype=np.float64),
-        coverage_pct=np.asarray([float(r.get('coverage_pct', np.nan)) for r in rows], dtype=np.float64),
+        episode=np.asarray([float(_pick(r, 'episode', 'Episode', default=i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
+        timesteps=np.asarray([float(_pick(r, 'timesteps', 'Steps', default=i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
+        wall_time_sec=np.asarray([float(_pick(r, 'wall_time_sec', 'Wall_time', default=i + 1)) for i, r in enumerate(rows)], dtype=np.float64),
+        episode_reward=np.asarray([float(_pick(r, 'episode_reward', 'Reward', default=np.nan)) for r in rows], dtype=np.float64),
+        coverage_pct=np.asarray([float(_pick(r, 'coverage_pct', 'Coverage_Rate', default=np.nan)) for r in rows], dtype=np.float64),
     )
 
 

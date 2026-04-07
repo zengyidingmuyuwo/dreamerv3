@@ -50,6 +50,11 @@ from global_planner import DronePlanner
 class UAVFireEnv(gym.Env):
     """Single fixed-wing UAV fire-point coverage environment."""
     _TRAJECTORY_REGISTRY = {}
+    RADAR_RANGE_M = 3000.0
+    MAX_TRACKED_BIRDS = 3
+    BIRD_SPEED_M_S = 14.0
+    BIRD_COLLISION_RADIUS_M = 120.0
+    PENALTY_BIRD_COLLISION = -40.0
 
     metadata = {'render.modes': ['human']}
 
@@ -94,7 +99,10 @@ class UAVFireEnv(gym.Env):
     WIND_GUST_STDDEV_M_S     = 1.5
     TRAJECTORY_RESULTS_DIR   = 'trajectory_results'
 
-    def __init__(self, fire_points, radius, num_nearest=6, return_dict_obs=False, algorithm_name='RL', env_name=None):
+    def __init__(
+        self, fire_points, radius, num_nearest=6, return_dict_obs=False,
+        algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3
+    ):
         """
         Parameters
         ----------
@@ -117,8 +125,11 @@ class UAVFireEnv(gym.Env):
         self.n_fire       = len(self.fire_points)
         self._validate_coordinate_scale()
 
-        # State dimension: 5 base + 3 per nearest fire point
-        self.state_dim = 5 + self.num_nearest * 3
+        self.radar_range_m = float(radar_range_m) if radar_range_m is not None else float(self.RADAR_RANGE_M)
+        self.num_birds = int(max(0, num_birds))
+
+        # State dimension: 5 base + 3 per nearest fire point + 4 per tracked bird
+        self.state_dim = 5 + self.num_nearest * 3 + self.MAX_TRACKED_BIRDS * 4
         self.vector_dim = 4
 
         self.action_space = spaces.Box(
@@ -155,6 +166,9 @@ class UAVFireEnv(gym.Env):
         self._current_ep_score = 0.0
         self._wind_history = []
         self._wind_state = np.zeros(2, dtype=np.float32)
+        self._birds_pos = np.zeros((self.num_birds, 2), dtype=np.float32)
+        self._birds_vel = np.zeros((self.num_birds, 2), dtype=np.float32)
+        self._bird_trails = [[] for _ in range(self.num_birds)]
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -185,10 +199,12 @@ class UAVFireEnv(gym.Env):
         self._done      = False
         self._trajectory = [self.pos.copy()]
         self._register_trajectory_for_snapshot()
+        self._register_visit_for_snapshot()
         self.steps_since_last_waypoint = 0
         self._current_ep_score = 0.0
         self._wind_history = []
         self._wind_state = np.zeros(2, dtype=np.float32)
+        self._init_birds()
         self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
@@ -215,6 +231,7 @@ class UAVFireEnv(gym.Env):
         wind_displacement = wind_velocity * self.DT
         self.pos = self.pos + control_displacement + wind_displacement
         outside_hard_boundary = float(np.linalg.norm(self.pos)) > self.radius * self.HARD_BOUNDARY_FACTOR
+        self._update_birds()
         self._trajectory.append(self.pos.copy())
         self._register_trajectory_for_snapshot()
         self.step_count += 1
@@ -223,9 +240,14 @@ class UAVFireEnv(gym.Env):
         reward  = self.REWARD_STEP
         n_before = int(np.sum(self.visited))
         reward  += self._check_visits()
+        self._register_visit_for_snapshot()
         reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
+        bird_hit = self._bird_collision()
+        if bird_hit:
+            reward += self.PENALTY_BIRD_COLLISION
+            self._done = True
         off_path = self._is_off_path()
 
         # ── Termination ──────────────────────────────────────────────────────
@@ -241,7 +263,7 @@ class UAVFireEnv(gym.Env):
             if self._episode_count == 1:
                 initial_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                    f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=initial_path,
@@ -252,7 +274,7 @@ class UAVFireEnv(gym.Env):
                 self._best_ep_score = self._current_ep_score
                 best_path = os.path.join(
                     self.TRAJECTORY_RESULTS_DIR,
-                    f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                    f'best_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
                 )
                 self._save_trajectory_snapshot(
                     save_path=best_path,
@@ -267,6 +289,7 @@ class UAVFireEnv(gym.Env):
             'total_fire_points': self.n_fire,
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
+            'bird_collision': bool(bird_hit),
             'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
@@ -278,32 +301,65 @@ class UAVFireEnv(gym.Env):
             import matplotlib.pyplot as plt
             import matplotlib.patches as mpatches
         except ImportError:
+            abs_path = os.path.abspath(save_path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, 'wb') as f:
+                f.write(b'')
+            print(f'[Trajectory] Matplotlib unavailable, created placeholder: {abs_path}')
             return
 
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
-
-        unv = self.fire_points[~self.visited]
-        vis = self.fire_points[self.visited]
-        if len(unv):
-            ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
-        if len(vis):
-            ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
+        colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
+        group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
+        if self.env_name.lower() != 'circle1':
+            unv = self.fire_points[~self.visited]
+            vis = self.fire_points[self.visited]
+            if len(unv):
+                ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
+            if len(vis):
+                ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
+        else:
+            ids = sorted(group.keys())
+            for idx, env_id in enumerate(ids):
+                item = group[env_id]
+                fp = item.get('fire_points', np.zeros((0, 2), dtype=np.float32))
+                vm = item.get('visited_mask', np.zeros((0,), dtype=bool))
+                if len(fp) == 0:
+                    continue
+                color = colors[idx % len(colors)]
+                unv = fp[~vm]
+                vis = fp[vm]
+                if len(unv):
+                    ax.scatter(unv[:, 0], unv[:, 1], c='lightcoral', s=20, alpha=0.35, zorder=2)
+                if len(vis):
+                    ax.scatter(vis[:, 0], vis[:, 1], c=color, s=28, marker='o', zorder=4,
+                               label=f'UAV{idx + 1} Visited')
 
         if self.env_name.lower() != 'circle1' and len(self._trajectory) > 1:
             traj = np.array(self._trajectory, dtype=np.float32)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
         if self.env_name.lower() == 'circle1':
-            group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
             ids = sorted(group.keys())
-            colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
             for idx, env_id in enumerate(ids):
-                tr = np.asarray(group[env_id], dtype=np.float32)
+                tr = np.asarray(group[env_id].get('trajectory', []), dtype=np.float32)
                 if len(tr) <= 1:
                     continue
                 color = colors[idx % len(colors)]
                 ax.plot(tr[:, 0], tr[:, 1], '-', lw=1.5, alpha=0.85, color=color,
                         label=f'UAV{idx + 1} Trajectory')
+                birds = np.asarray(group[env_id].get('bird_trail_last', []), dtype=np.float32)
+                if len(birds):
+                    ax.scatter(birds[:, 0], birds[:, 1], marker='^', c='red', s=26, zorder=5)
+
+        ax.add_patch(mpatches.Circle(
+            (self.pos[0], self.pos[1]), self.radar_range_m,
+            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
+            alpha=0.7, zorder=2, label='Radar Range'
+        ))
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], marker='^',
+                       c='red', s=36, zorder=6, label='Birds')
         if self._wind_history:
             wind_arr = np.array(self._wind_history, dtype=np.float32)
             wind_mean = np.mean(wind_arr, axis=0)
@@ -331,8 +387,10 @@ class UAVFireEnv(gym.Env):
             f'{title_prefix} | score={self._current_ep_score:.2f} | '
             f'coverage={coverage_rate * 100:.1f}%'
         )
-        plt.savefig(save_path, dpi=300)
+        abs_path = os.path.abspath(save_path)
+        plt.savefig(abs_path, dpi=300)
         plt.close(fig)
+        print(f'[Trajectory] Saved snapshot: {abs_path}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -389,12 +447,14 @@ class UAVFireEnv(gym.Env):
         remaining_ratio = float(np.sum(~self.visited)) / self.n_fire
 
         nearest_feat = self._nearest_fire_features()
+        bird_feat = self._nearest_bird_features()
 
         obs = np.concatenate([
             pos_norm,
             heading_feat,
             [remaining_ratio],
             nearest_feat,
+            bird_feat,
         ]).astype(np.float32)
         vec = self._waypoint_vector()
         if self.return_dict_obs:
@@ -426,7 +486,16 @@ class UAVFireEnv(gym.Env):
     def _register_trajectory_for_snapshot(self):
         key = self._registry_key()
         group = self._TRAJECTORY_REGISTRY.setdefault(key, {})
-        group[id(self)] = np.array(self._trajectory, dtype=np.float32)
+        rec = group.setdefault(id(self), {})
+        rec['trajectory'] = np.array(self._trajectory, dtype=np.float32)
+        rec['bird_trail_last'] = np.array(self._birds_pos, dtype=np.float32) if self.num_birds else np.zeros((0, 2), dtype=np.float32)
+
+    def _register_visit_for_snapshot(self):
+        key = self._registry_key()
+        group = self._TRAJECTORY_REGISTRY.setdefault(key, {})
+        rec = group.setdefault(id(self), {})
+        rec['fire_points'] = np.array(self.fire_points, dtype=np.float32)
+        rec['visited_mask'] = np.array(self.visited, dtype=bool)
 
     def _plan_waypoints(self):
         result = self._planner.plan(self.pos, self.fire_points)
@@ -503,17 +572,77 @@ class UAVFireEnv(gym.Env):
         pts   = self.fire_points[unvisited_idx]
         diffs = pts - self.pos
         dists = np.linalg.norm(diffs, axis=1)
+        visible = dists <= self.radar_range_m
+        if not np.any(visible):
+            return feat
+        pts = pts[visible]
+        diffs = diffs[visible]
+        dists = dists[visible]
 
-        k     = min(self.num_nearest, len(unvisited_idx))
+        k     = min(self.num_nearest, len(dists))
         order = np.argsort(dists)[:k]
 
         for i, j in enumerate(order):
-            d     = float(np.clip(dists[j] / self.radius, 0.0, 1.0))
+            d     = float(np.clip(dists[j] / self.radar_range_m, 0.0, 1.0))
             angle = float(np.arctan2(diffs[j, 1], diffs[j, 0]))
             feat[i * 3]     = d
             feat[i * 3 + 1] = np.sin(angle)
             feat[i * 3 + 2] = np.cos(angle)
 
+        return feat
+
+    def _init_birds(self):
+        if self.num_birds <= 0:
+            self._birds_pos = np.zeros((0, 2), dtype=np.float32)
+            self._birds_vel = np.zeros((0, 2), dtype=np.float32)
+            self._bird_trails = []
+            return
+        angles = np.random.uniform(0.0, 2.0 * np.pi, self.num_birds)
+        radii = np.sqrt(np.random.uniform(0.0, 1.0, self.num_birds)) * self.radius * 0.9
+        self._birds_pos = np.stack(
+            [radii * np.cos(angles), radii * np.sin(angles)], axis=1
+        ).astype(np.float32)
+        vel_ang = np.random.uniform(0.0, 2.0 * np.pi, self.num_birds)
+        speed = np.random.uniform(0.5, 1.0, self.num_birds) * self.BIRD_SPEED_M_S
+        self._birds_vel = np.stack(
+            [speed * np.cos(vel_ang), speed * np.sin(vel_ang)], axis=1
+        ).astype(np.float32)
+        self._bird_trails = [[self._birds_pos[i].copy()] for i in range(self.num_birds)]
+
+    def _update_birds(self):
+        if self.num_birds <= 0:
+            return
+        self._birds_pos = self._birds_pos + self._birds_vel * self.DT
+        for i in range(self.num_birds):
+            norm = float(np.linalg.norm(self._birds_pos[i]))
+            if norm > self.radius:
+                normal = self._birds_pos[i] / max(norm, 1e-6)
+                self._birds_pos[i] = normal * (self.radius * 0.98)
+                v = self._birds_vel[i]
+                self._birds_vel[i] = v - 2.0 * np.dot(v, normal) * normal
+            self._bird_trails[i].append(self._birds_pos[i].copy())
+
+    def _bird_collision(self):
+        if self.num_birds <= 0:
+            return False
+        d = np.linalg.norm(self._birds_pos - self.pos[None, :], axis=1)
+        return bool(np.any(d <= self.BIRD_COLLISION_RADIUS_M))
+
+    def _nearest_bird_features(self):
+        feat = np.zeros(self.MAX_TRACKED_BIRDS * 4, dtype=np.float32)
+        if self.num_birds <= 0:
+            return feat
+        diffs = self._birds_pos - self.pos[None, :]
+        dists = np.linalg.norm(diffs, axis=1)
+        visible = np.where(dists <= self.radar_range_m)[0]
+        if len(visible) == 0:
+            return feat
+        order = visible[np.argsort(dists[visible])[:self.MAX_TRACKED_BIRDS]]
+        vmax = max(self.BIRD_SPEED_M_S, 1.0)
+        for i, idx in enumerate(order):
+            dx, dy = diffs[idx] / self.radar_range_m
+            vx, vy = self._birds_vel[idx] / vmax
+            feat[i * 4: i * 4 + 4] = np.clip([dx, dy, vx, vy], -1.0, 1.0)
         return feat
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -547,6 +676,17 @@ class UAVFireEnv(gym.Env):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
+        ax.add_patch(mpatches.Circle(
+            (self.pos[0], self.pos[1]), self.radar_range_m,
+            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
+            alpha=0.65, zorder=2
+        ))
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], c='red', s=48, marker='^', zorder=6, label='Birds')
+            for i in range(self.num_birds):
+                bt = np.asarray(self._bird_trails[i], dtype=np.float32)
+                if len(bt) > 1:
+                    ax.plot(bt[:, 0], bt[:, 1], color='red', lw=0.8, alpha=0.25)
 
         # UAV
         ax.scatter(*self.pos, c='blue', s=120, marker='^', zorder=5)

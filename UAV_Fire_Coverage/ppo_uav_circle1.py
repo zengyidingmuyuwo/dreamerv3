@@ -270,7 +270,7 @@ def main():
     if args.load:
         agent.load(args.save_dir)
     episode_logger = EpisodeCSVLogger('PPO', 'Circle1', args.log_dir)
-    print(f'[PPO Circle1] Writing training log to: {episode_logger.path}')
+    print(f'[PPO Circle1] Writing training log to: {os.path.abspath(episode_logger.path)}')
 
     # ── Training ──────────────────────────────────────────────────────────────
     running_rewards = [0.0] * len(envs)

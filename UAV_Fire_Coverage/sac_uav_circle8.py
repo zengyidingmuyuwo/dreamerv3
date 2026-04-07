@@ -95,7 +95,7 @@ if not args.elevation_tif:
     elev_dir = os.path.join(PREPARE_DIR, 'elevation')
     if os.path.isdir(elev_dir):
         tif_candidates = sorted(
-            f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff'))
+            f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff', '.zip'))
         )
         if tif_candidates:
             args.elevation_tif = os.path.join(elev_dir, tif_candidates[0])
@@ -293,6 +293,7 @@ class SACAgent:
 def main():
     obstacle_map = None
     resolution_m = 50.0
+    dem_query_metadata = None
 
     # ── Data ─────────────────────────────────────────────────────────────────
     if args.center_csv and os.path.exists(args.center_csv) and \
@@ -306,10 +307,11 @@ def main():
         if args.elevation_tif and os.path.exists(args.elevation_tif):
             print(f'[SAC Circle8] Loading elevation map: {args.elevation_tif}')
             try:
-                obstacle_map, resolution_m = load_elevation_obstacle_map(
+                obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
                     args.elevation_tif, lat_c, lon_c,
                     region_radius_m=radius,
                     elevation_threshold=args.elev_threshold,
+                    return_metadata=True,
                 )
                 n_obs = int(np.sum(obstacle_map))
                 print(f'  Obstacle map: {obstacle_map.shape}  '
@@ -332,6 +334,10 @@ def main():
         resolution_m=resolution_m,
         algorithm_name='SAC',
         env_name='Circle8',
+        lat_center=lat_c,
+        lon_center=lon_c,
+        elevation_threshold=args.elev_threshold,
+        dem_query_metadata=dem_query_metadata,
     )
     state_dim  = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -342,7 +348,7 @@ def main():
     if args.load:
         agent.load(args.save_dir)
     episode_logger = EpisodeCSVLogger('SAC', 'Circle8', args.log_dir)
-    print(f'[SAC Circle8] Writing training log to: {episode_logger.path}')
+    print(f'[SAC Circle8] Writing training log to: {os.path.abspath(episode_logger.path)}')
 
     running_reward = 0.0
     total_steps    = 0

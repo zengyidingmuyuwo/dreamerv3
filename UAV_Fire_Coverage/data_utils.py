@@ -18,6 +18,7 @@ import csv
 import math
 import warnings
 import numpy as np
+import zipfile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Coordinate helpers
@@ -295,9 +296,64 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
 # GeoTIFF elevation loader (optional — requires rasterio)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def resolve_elevation_raster_path(path):
+    """Resolve DEM source path; supports .tif/.tiff and .zip containing tif."""
+    if not path:
+        raise ValueError("Empty elevation path")
+    src = os.path.abspath(path)
+    if not os.path.exists(src):
+        raise FileNotFoundError(f"Elevation source not found: {src}")
+    lower = src.lower()
+    if lower.endswith(('.tif', '.tiff')):
+        return src
+    if not lower.endswith('.zip'):
+        raise ValueError(f"Unsupported elevation file type: {src}")
+    cache_dir = os.path.join('/tmp', 'dreamerv3_dem_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    with zipfile.ZipFile(src, 'r') as zf:
+        names = [n for n in zf.namelist() if n.lower().endswith(('.tif', '.tiff'))]
+        if not names:
+            raise ValueError(f"No tif/tiff found in zip: {src}")
+        pick = sorted(names)[0]
+        out = os.path.join(cache_dir, os.path.basename(pick))
+        if not os.path.exists(out):
+            zf.extract(pick, cache_dir)
+            extracted = os.path.join(cache_dir, pick)
+            if extracted != out:
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                os.replace(extracted, out)
+    return out
+
+
+def build_dem_query_metadata(tif_filepath):
+    """Load full DEM and transforms for step-time elevation query."""
+    try:
+        import rasterio
+        from pyproj import Transformer
+    except ImportError:
+        return None
+    raster_path = resolve_elevation_raster_path(tif_filepath)
+    with rasterio.open(raster_path) as src:
+        elevation = src.read(1)
+        transform = src.transform
+        crs = src.crs
+        nodata = src.nodata
+        height, width = src.height, src.width
+    to_raster = Transformer.from_crs("EPSG:4326", crs, always_xy=True) if crs else None
+    return {
+        'elevation': elevation,
+        'transform': transform,
+        'to_raster': to_raster,
+        'width': int(width),
+        'height': int(height),
+        'nodata': nodata,
+        'source_path': raster_path,
+    }
+
+
 def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
                                  region_radius_m, elevation_threshold=2000.0,
-                                 target_resolution_m=50.0):
+                                 target_resolution_m=50.0, return_metadata=False):
     """Load a GeoTIFF elevation map and build a binary obstacle grid.
 
     Pixels with elevation ≥ *elevation_threshold* metres are marked as
@@ -334,10 +390,9 @@ def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
             "Install it with:  pip install rasterio"
         )
 
-    if not os.path.exists(tif_filepath):
-        raise FileNotFoundError(f"Elevation TIF not found: {tif_filepath}")
+    raster_path = resolve_elevation_raster_path(tif_filepath)
 
-    with rasterio.open(tif_filepath) as src:
+    with rasterio.open(raster_path) as src:
         # Build a bounding box in geographic coordinates
         delta_lat = region_radius_m / 111_000.0
         delta_lon = region_radius_m / (111_000.0 * math.cos(math.radians(lat_center)))
@@ -361,7 +416,9 @@ def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
         )
 
     obstacle_map = (elevation >= elevation_threshold)
-    return obstacle_map.astype(bool), float(target_resolution_m)
+    if not return_metadata:
+        return obstacle_map.astype(bool), float(target_resolution_m)
+    return obstacle_map.astype(bool), float(target_resolution_m), build_dem_query_metadata(raster_path)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -46,7 +46,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
     def __init__(self, fire_points, radius,
                  obstacle_map=None, resolution_m=50.0,
                  num_nearest=6, return_dict_obs=False, algorithm_name='RL',
-                 env_name=None):
+                 env_name=None, lat_center=None, lon_center=None,
+                 elevation_threshold=2000.0, dem_query_metadata=None,
+                 radar_range_m=None, num_birds=3):
         """
         Parameters
         ----------
@@ -66,10 +68,16 @@ class UAVFireObstacleEnv(UAVFireEnv):
             return_dict_obs=return_dict_obs,
             algorithm_name=algorithm_name,
             env_name=env_name,
+            radar_range_m=radar_range_m,
+            num_birds=num_birds,
         )
 
         self.obstacle_map  = obstacle_map   # (H, W) bool or None
         self.resolution_m  = float(resolution_m)
+        self.lat_center = float(lat_center) if lat_center is not None else None
+        self.lon_center = float(lon_center) if lon_center is not None else None
+        self.elevation_threshold = float(elevation_threshold)
+        self.dem_query_metadata = dem_query_metadata
 
         # Extend state dimension with NUM_SENSORS obstacle distances
         extra = self.NUM_SENSORS
@@ -119,13 +127,21 @@ class UAVFireObstacleEnv(UAVFireEnv):
         wind_velocity = self._compute_wind_velocity()
         wind_displacement = wind_velocity * self.DT
         self.pos = self.pos + control_displacement + wind_displacement
+        self._update_birds()
         self._trajectory.append(self.pos.copy())
+        self._register_trajectory_for_snapshot()
         self.step_count += 1
 
         # ── Collision check ──────────────────────────────────────────────────
         reward = self.REWARD_STEP
-        if self._at_obstacle(self.pos):
+        elev_m = self._query_elevation_m(self.pos)
+        hit_mountain = (elev_m is not None and elev_m > self.elevation_threshold)
+        hit_obstacle = self._at_obstacle(self.pos)
+        bird_hit = self._bird_collision()
+        if hit_mountain or hit_obstacle or bird_hit:
             reward += self.PENALTY_COLLISION
+            if bird_hit:
+                reward += self.PENALTY_BIRD_COLLISION
             self._done = True
             self._current_ep_score += float(reward)
             self._finalize_episode_record(float(np.sum(self.visited)) / self.n_fire)
@@ -135,6 +151,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
                 'step': self.step_count,
                 'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
                 'collision': True,
+                'mountain_collision': bool(hit_mountain or hit_obstacle),
+                'bird_collision': bool(bird_hit),
+                'elevation_m': float(elev_m) if elev_m is not None else None,
             }
             if _GYM_TUPLE_5:
                 return self._get_obs(), float(reward), True, False, info
@@ -148,6 +167,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         # ── Visit, shaping & boundary (same as base) ─────────────────────────
         n_before = int(np.sum(self.visited))
         reward  += self._check_visits()
+        self._register_visit_for_snapshot()
         reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
@@ -167,6 +187,9 @@ class UAVFireObstacleEnv(UAVFireEnv):
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
             'collision': False,
+            'mountain_collision': False,
+            'bird_collision': False,
+            'elevation_m': float(elev_m) if elev_m is not None else None,
             'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
@@ -180,7 +203,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._episode_count == 1:
             initial_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                f'initial_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=initial_path,
@@ -191,7 +214,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
             self._best_ep_score = self._current_ep_score
             best_path = os.path.join(
                 self.TRAJECTORY_RESULTS_DIR,
-                f'best_{self.algorithm_name}_{self.env_name}_PID{pid}.png',
+                f'best_{self.algorithm_name}_{self.env_name}_PID{pid}_ID{id(self)}.png',
             )
             self._save_trajectory_snapshot(
                 save_path=best_path,
@@ -209,6 +232,42 @@ class UAVFireObstacleEnv(UAVFireEnv):
             img = np.concatenate([base_obs['image'], sensors]).astype(np.float32)
             return {'image': img, 'vector': base_obs['vector']}
         return np.concatenate([base_obs, sensors]).astype(np.float32)
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _local_to_latlon(self, pos):
+        if self.lat_center is None or self.lon_center is None:
+            return None
+        east_m, north_m = float(pos[0]), float(pos[1])
+        R = 111_000.0
+        lat = self.lat_center + north_m / R
+        lon = self.lon_center + east_m / (R * np.cos(np.radians(self.lat_center)))
+        return float(lat), float(lon)
+
+    def _query_elevation_m(self, pos):
+        meta = self.dem_query_metadata
+        if not meta:
+            return None
+        ll = self._local_to_latlon(pos)
+        if ll is None:
+            return None
+        lat, lon = ll
+        to_raster = meta.get('to_raster')
+        if to_raster is None:
+            return None
+        try:
+            rx, ry = to_raster.transform(lon, lat)
+            from rasterio.transform import rowcol
+            row, col = rowcol(meta['transform'], rx, ry)
+            if row < 0 or col < 0 or row >= meta['height'] or col >= meta['width']:
+                return None
+            val = float(meta['elevation'][row, col])
+            nodata = meta.get('nodata')
+            if nodata is not None and np.isclose(val, nodata):
+                return None
+            return val
+        except Exception:
+            return None
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -261,6 +320,11 @@ class UAVFireObstacleEnv(UAVFireEnv):
             import matplotlib.pyplot as plt
             import matplotlib.patches as mpatches
         except ImportError:
+            abs_path = os.path.abspath(save_path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, 'wb') as f:
+                f.write(b'')
+            print(f'[Trajectory] Matplotlib unavailable, created placeholder: {abs_path}')
             return
 
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -275,16 +339,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
             ]
             obs_float = self.obstacle_map.astype(np.float32)
             ax.contourf(
-                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=0.35,
+                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=1.0,
                 extent=ext, origin='upper', zorder=0
             )
-            ax.imshow(obs_float, cmap='Greys', alpha=0.25, extent=ext, origin='upper', zorder=0)
-            obs_y, obs_x = np.where(self.obstacle_map)
-            if len(obs_x):
-                x_coords = (obs_x - (W // 2)) * self.resolution_m
-                y_coords = ((H // 2) - obs_y) * self.resolution_m
-                ax.scatter(x_coords, y_coords, c='black', s=4, alpha=0.5, marker='s',
-                           zorder=1, label='Obstacles')
+            ax.imshow(obs_float, cmap='Greys', alpha=0.95, extent=ext, origin='upper', zorder=0)
 
         ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
 
@@ -298,6 +356,18 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory, dtype=np.float32)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+        ax.add_patch(mpatches.Circle(
+            (self.pos[0], self.pos[1]), self.radar_range_m,
+            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
+            alpha=0.7, zorder=2, label='Radar Range'
+        ))
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], marker='^',
+                       c='red', s=42, zorder=6, label='Birds')
+            for i in range(self.num_birds):
+                bt = np.asarray(self._bird_trails[i], dtype=np.float32)
+                if len(bt) > 1:
+                    ax.plot(bt[:, 0], bt[:, 1], color='red', lw=0.8, alpha=0.25)
         if self._wind_history:
             wind_arr = np.array(self._wind_history, dtype=np.float32)
             wind_mean = np.mean(wind_arr, axis=0)
@@ -325,8 +395,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
             f'{title_prefix} | score={self._current_ep_score:.2f} | '
             f'coverage={coverage_rate * 100:.1f}%'
         )
-        plt.savefig(save_path, dpi=300)
+        abs_path = os.path.abspath(save_path)
+        plt.savefig(abs_path, dpi=300)
         plt.close(fig)
+        print(f'[Trajectory] Saved snapshot: {abs_path}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -352,10 +424,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
                    -H // 2 * self.resolution_m, H // 2 * self.resolution_m]
             obs_float = self.obstacle_map.astype(np.float32)
             ax.contourf(
-                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=0.35,
+                obs_float, levels=[0.5, 1.5], colors=['black'], alpha=1.0,
                 extent=ext, origin='upper', zorder=0
             )
-            ax.imshow(obs_float, cmap='Greys', alpha=0.25,
+            ax.imshow(obs_float, cmap='Greys', alpha=0.95,
                       extent=ext, origin='upper', zorder=0)
 
         # Boundary circle
@@ -372,6 +444,17 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
+        ax.add_patch(mpatches.Circle(
+            (self.pos[0], self.pos[1]), self.radar_range_m,
+            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
+            alpha=0.65, zorder=2
+        ))
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], c='red', s=48, marker='^', zorder=6, label='Birds')
+            for i in range(self.num_birds):
+                bt = np.asarray(self._bird_trails[i], dtype=np.float32)
+                if len(bt) > 1:
+                    ax.plot(bt[:, 0], bt[:, 1], color='red', lw=0.8, alpha=0.25)
 
         # UAV
         ax.scatter(*self.pos, c='blue', s=120, marker='^', zorder=5)
