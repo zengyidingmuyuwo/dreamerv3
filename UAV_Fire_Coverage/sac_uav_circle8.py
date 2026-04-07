@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uav_fire_obstacle_env import UAVFireObstacleEnv
 from data_utils import (load_circle_data, load_elevation_obstacle_map,
                         generate_sample_circle8_data)
+from comparison_logging import EpisodeCSVLogger
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -87,6 +88,8 @@ parser.add_argument('--save_interval', default=200,   type=int)
 parser.add_argument('--render',        action='store_true')
 parser.add_argument('--load',          action='store_true')
 parser.add_argument('--save_dir',      default='./sac_circle8_model', type=str)
+parser.add_argument('--log_dir',       default=os.path.join(SCRIPT_DIR, 'logs'), type=str,
+                    help='Directory for unified comparison CSV logs')
 args = parser.parse_args()
 if not args.elevation_tif:
     elev_dir = os.path.join(PREPARE_DIR, 'elevation')
@@ -338,6 +341,8 @@ def main():
     agent = SACAgent(state_dim, action_dim)
     if args.load:
         agent.load(args.save_dir)
+    episode_logger = EpisodeCSVLogger('SAC', 'Circle8', args.log_dir)
+    print(f'[SAC Circle8] Writing training log to: {episode_logger.path}')
 
     running_reward = 0.0
     total_steps    = 0
@@ -375,6 +380,13 @@ def main():
                   f'ep_r={ep_reward:7.1f}  running_r={running_reward:7.1f}  '
                   f'coverage={cov:.1f}%  collision={collision}  '
                   f'updates={agent.num_updates}')
+        episode_logger.log_episode(
+            episode=episode,
+            timesteps=total_steps,
+            episode_reward=ep_reward,
+            coverage_pct=info.get('coverage_rate', 0.0) * 100.0,
+            collision=bool(info.get('collision', False)),
+        )
 
         if episode % args.save_interval == 0:
             agent.save(args.save_dir)

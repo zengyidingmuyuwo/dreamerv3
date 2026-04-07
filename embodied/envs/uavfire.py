@@ -13,6 +13,7 @@ if UAV_DIR not in sys.path:
 from data_utils import load_circle_data, load_elevation_obstacle_map, generate_sample_circle1_data, generate_sample_circle8_data
 from uav_fire_env import UAVFireEnv
 from uav_fire_obstacle_env import UAVFireObstacleEnv
+from comparison_logging import EpisodeCSVLogger
 
 
 class UAVFire(embodied.Env):
@@ -29,8 +30,13 @@ class UAVFire(embodied.Env):
       seed=None,
   ):
     assert task in ('circle1', 'circle8'), task
+    self._task = task
     self._done = True
     self._info = {}
+    self._episode = 0
+    self._episode_reward = 0.0
+    self._episode_steps = 0
+    self._total_steps = 0
     use_real = bool(center_csv) and bool(points_file) and os.path.exists(center_csv) and os.path.exists(points_file)
     if use_real:
       kwargs = {} if circle_id == -1 else {'circle_id': int(circle_id)}
@@ -65,6 +71,9 @@ class UAVFire(embodied.Env):
       self._env = UAVFireEnv(
           fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
           algorithm_name='DREAMER', env_name='Circle1')
+    log_dir = os.path.join(UAV_DIR, 'logs')
+    scenario_name = 'Circle8' if task == 'circle8' else 'Circle1'
+    self._episode_logger = EpisodeCSVLogger('DREAMER', scenario_name, log_dir)
 
   @property
   def obs_space(self):
@@ -89,6 +98,8 @@ class UAVFire(embodied.Env):
   def step(self, action):
     if action['reset'] or self._done:
       self._done = False
+      self._episode_reward = 0.0
+      self._episode_steps = 0
       out = self._env.reset()
       if isinstance(out, tuple):
         obs, _ = out
@@ -101,6 +112,18 @@ class UAVFire(embodied.Env):
       done = bool(terminated or truncated)
     else:
       obs, reward, done, self._info = out
+    self._episode_reward += float(reward)
+    self._episode_steps += 1
+    self._total_steps += 1
+    if done:
+      self._episode += 1
+      self._episode_logger.log_episode(
+          episode=self._episode,
+          timesteps=self._total_steps,
+          episode_reward=self._episode_reward,
+          coverage_pct=float(self._info.get('coverage_rate', 0.0)) * 100.0,
+          collision=bool(self._info.get('collision', False)),
+      )
     self._done = done
     return self._obs(obs, reward, is_last=done, is_terminal=done)
 

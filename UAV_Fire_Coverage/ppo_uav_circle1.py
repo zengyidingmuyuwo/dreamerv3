@@ -40,6 +40,7 @@ from uav_fire_env import UAVFireEnv
 from data_utils import (load_circle_data, generate_sample_circle1_data,
                         save_sample_center_csv, save_sample_points_csv,
                         load_circle_center_csv)
+from comparison_logging import EpisodeCSVLogger
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -96,6 +97,8 @@ parser.add_argument('--save_interval', default=200, type=int)
 parser.add_argument('--render',      action='store_true')
 parser.add_argument('--load',        action='store_true', help='Load saved model')
 parser.add_argument('--save_dir',    default='./ppo_circle1_model', type=str)
+parser.add_argument('--log_dir',     default=os.path.join(SCRIPT_DIR, 'logs'), type=str,
+                    help='Directory for unified comparison CSV logs')
 args = parser.parse_args()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -266,6 +269,8 @@ def main():
     agent = PPOAgent(state_dim, action_dim)
     if args.load:
         agent.load(args.save_dir)
+    episode_logger = EpisodeCSVLogger('PPO', 'Circle1', args.log_dir)
+    print(f'[PPO Circle1] Writing training log to: {episode_logger.path}')
 
     # ── Training ──────────────────────────────────────────────────────────────
     running_rewards = [0.0] * len(envs)
@@ -305,6 +310,13 @@ def main():
                   f'steps={t+1:4d}  ep_r={ep_reward:7.1f}  '
                   f'running_r={running_rewards[env_idx]:7.1f}  '
                   f'coverage={cov:.1f}%')
+        episode_logger.log_episode(
+            episode=episode,
+            timesteps=total_steps,
+            episode_reward=ep_reward,
+            coverage_pct=info.get('coverage_rate', 0.0) * 100.0,
+            collision=bool(info.get('collision', False)),
+        )
 
         if episode % args.save_interval == 0:
             agent.save(args.save_dir)
