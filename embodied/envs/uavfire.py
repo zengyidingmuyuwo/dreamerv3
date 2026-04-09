@@ -31,7 +31,7 @@ class UAVFire(embodied.Env):
       elev_threshold=2000.0,
       num_nearest=6,
       resolution_m=50.0,
-      num_uavs=3,
+      num_uavs=-1,
       seed=None,
   ):
     assert task in ('circle1', 'circle8'), task
@@ -90,9 +90,14 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    self._num_uavs = int(num_uavs)
-    if self._num_uavs < 1:
-      raise ValueError(f'num_uavs must be >= 1, got {num_uavs!r}')
+    strict_num_uavs = 1 if task == 'circle8' else 3
+    requested_num_uavs = int(num_uavs)
+    if requested_num_uavs not in (-1, strict_num_uavs):
+      print(
+          f'[Dreamer UAVFire] Override num_uavs={requested_num_uavs} -> {strict_num_uavs} '
+          f'for strict {task} baseline.'
+      )
+    self._num_uavs = strict_num_uavs
     UAVFireEnv, UAVFireObstacleEnv = _load_env_classes()
     clusters = self._cluster_fire_points(fire_points, self._num_uavs)
     self._envs = []
@@ -109,6 +114,7 @@ class UAVFire(embodied.Env):
             algorithm_name='DREAMER', env_name='Circle1')
       self._envs.append(env)
     self._num_uavs = len(self._envs)
+    self.num_agents = self._num_uavs
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])

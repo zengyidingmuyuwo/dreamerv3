@@ -326,10 +326,12 @@ class UAVFireEnv(gym.Env):
         colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
         group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
         ids = sorted(group.keys())
+        self.num_agents = len(ids) if ids else 1
         show_multi_uav = bool(ids) and (len(ids) > 1 or self.env_name.lower() == 'circle1')
         if show_multi_uav:
             added_unvisited_label = False
-            for idx, env_id in enumerate(ids):
+            for idx in range(self.num_agents):
+                env_id = ids[idx]
                 item = group[env_id]
                 fp = item.get('fire_points', np.zeros((0, 2), dtype=np.float32))
                 vm = item.get('visited_mask', np.zeros((0,), dtype=bool))
@@ -358,7 +360,8 @@ class UAVFireEnv(gym.Env):
                 ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
 
         if show_multi_uav:
-            for idx, env_id in enumerate(ids):
+            for idx in range(self.num_agents):
+                env_id = ids[idx]
                 tr = np.asarray(group[env_id].get('trajectory', []), dtype=np.float32)
                 if len(tr) <= 1:
                     continue
@@ -744,10 +747,12 @@ class UAVFireEnv(gym.Env):
         colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
         group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
         ids = sorted(group.keys())
+        self.num_agents = len(ids) if ids else 1
         show_multi_uav = bool(ids) and (len(ids) > 1 or self.env_name.lower() == 'circle1')
         if show_multi_uav:
             added_unvisited_label = False
-            for idx, env_id in enumerate(ids):
+            for idx in range(self.num_agents):
+                env_id = ids[idx]
                 item = group[env_id]
                 fp = np.asarray(item.get('fire_points', []), dtype=np.float32)
                 vm = np.asarray(item.get('visited_mask', []), dtype=bool)
@@ -777,7 +782,8 @@ class UAVFireEnv(gym.Env):
 
         # Trajectory
         if show_multi_uav:
-            for idx, env_id in enumerate(ids):
+            for idx in range(self.num_agents):
+                env_id = ids[idx]
                 tr = np.asarray(group[env_id].get('trajectory', []), dtype=np.float32)
                 if len(tr) <= 1:
                     continue
