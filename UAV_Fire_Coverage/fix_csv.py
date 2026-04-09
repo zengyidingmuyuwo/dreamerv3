@@ -4,8 +4,7 @@ from shapely.geometry import Point
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-base_dir = os.path.join(BASE_DIR, "prepare")
+base_dir = os.path.join(SCRIPT_DIR, "prepare")
 files = ["circle_1_center.csv", "circle_8_center.csv"]
 original_crs = "EPSG:32647"
 

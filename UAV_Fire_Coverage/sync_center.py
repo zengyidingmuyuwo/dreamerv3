@@ -3,8 +3,7 @@ import geopandas as gpd
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-base_dir = os.path.join(BASE_DIR, "prepare")
+base_dir = os.path.join(SCRIPT_DIR, "prepare")
 pairs = [
     ("circle_1_center.csv", "circle_1_points.shp"),
     ("circle_8_center.csv", "circle_8_points.shp")

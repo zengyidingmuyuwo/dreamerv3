@@ -26,4 +26,4 @@ def test_training_scripts_use_prepare_dir_defaults():
   ]
   for path in files:
     text = path.read_text(encoding='utf-8')
-    assert "PREPARE_DIR = os.path.join(BASE_DIR, 'prepare')" in text
+    assert "PREPARE_DIR = os.path.join(SCRIPT_DIR, 'prepare')" in text

@@ -11,6 +11,7 @@ import numpy as np
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 UAV_DIR = os.path.join(REPO_DIR, 'UAV_Fire_Coverage')
+PREPARE_DIR = os.path.join(UAV_DIR, 'prepare')
 if UAV_DIR not in sys.path:
     sys.path.insert(0, UAV_DIR)
 
@@ -97,20 +98,17 @@ def main():
     parser.add_argument('--resolution_m', type=float, default=50.0)
     parser.add_argument('--center_csv', type=str, default='')
     parser.add_argument('--dem', type=str, default='')
-    parser.add_argument('--output', type=str, default=os.path.join(REPO_DIR, 'prepare', 'circle8_obstacle_mask.npy'))
+    parser.add_argument('--output', type=str, default=os.path.join(PREPARE_DIR, 'circle8_obstacle_mask.npy'))
     args = parser.parse_args()
 
-    root_prepare = os.path.join(REPO_DIR, 'prepare')
-    pkg_prepare = os.path.join(UAV_DIR, 'prepare')
     center_csv = args.center_csv or _pick_existing(
-        os.path.join(root_prepare, 'circle_8_center.csv'),
-        os.path.join(pkg_prepare, 'circle_8_center.csv'),
+        os.path.join(PREPARE_DIR, 'circle_8_center.csv'),
     )
     if center_csv is None:
-        raise FileNotFoundError('circle_8_center.csv not found in prepare directories.')
-    dem_src = args.dem or _find_dem_candidate(root_prepare) or _find_dem_candidate(pkg_prepare)
+        raise FileNotFoundError('circle_8_center.csv not found in UAV_Fire_Coverage/prepare.')
+    dem_src = args.dem or _find_dem_candidate(PREPARE_DIR)
     if dem_src is None:
-        raise FileNotFoundError('No DEM .zip/.tif found under prepare directory.')
+        raise FileNotFoundError('No DEM .zip/.tif found under UAV_Fire_Coverage/prepare.')
 
     lat_c, lon_c, csv_radius = load_circle_center_csv(center_csv, circle_id=args.circle_id)
     radius_m = float(args.radius_m or csv_radius)
@@ -124,13 +122,7 @@ def main():
     )
     out_path = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    np.save(out_path, mask.astype(np.uint8))
-
-    # Convenience copy for existing UAV_Fire_Coverage-local data layouts.
-    mirror_path = os.path.join(pkg_prepare, 'circle8_obstacle_mask.npy')
-    if os.path.abspath(mirror_path) != out_path:
-        os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
-        np.save(mirror_path, mask.astype(np.uint8))
+    np.save(out_path, mask.astype(bool))
 
     print(f'[preprocess_dem] center_csv={center_csv}')
     print(f'[preprocess_dem] dem={dem_src}')
@@ -140,4 +132,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -60,6 +60,7 @@ class UAVFireEnv(gym.Env):
     BIRD_SPEED_M_S = 14.0
     BIRD_COLLISION_RADIUS_M = 120.0
     PENALTY_BIRD_COLLISION = -40.0
+    PENALTY_MOUNTAIN_COLLISION = -120.0
 
     metadata = {'render.modes': ['human']}
 
@@ -252,8 +253,12 @@ class UAVFireEnv(gym.Env):
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         bird_hit = self._bird_collision()
+        mountain_hit = self._is_circle8_mountain_collision()
         if bird_hit:
             reward += self.PENALTY_BIRD_COLLISION
+            self._done = True
+        if mountain_hit:
+            reward += self.PENALTY_MOUNTAIN_COLLISION
             self._done = True
         off_path = self._is_off_path()
 
@@ -294,7 +299,9 @@ class UAVFireEnv(gym.Env):
             'total_fire_points': self.n_fire,
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
+            'collision': bool(bird_hit or mountain_hit),
             'bird_collision': bool(bird_hit),
+            'mountain_collision': bool(mountain_hit),
             'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
@@ -396,9 +403,26 @@ class UAVFireEnv(gym.Env):
     def _circle8_obstacle_mask_candidates(self):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return [
-            os.path.join(base_dir, 'prepare', 'circle8_obstacle_mask.npy'),
             os.path.join(base_dir, 'UAV_Fire_Coverage', 'prepare', 'circle8_obstacle_mask.npy'),
         ]
+
+    def _is_circle8_env(self):
+        return 'circle8' in str(self.env_name).lower()
+
+    def _is_circle8_mountain_collision(self):
+        if not self._is_circle8_env():
+            return False
+        mask = self._load_circle8_obstacle_mask()
+        if mask is None or mask.size == 0:
+            return False
+        h, w = mask.shape
+        half_span = 15000.0
+        x, y = float(self.pos[0]), float(self.pos[1])
+        if x < -half_span or x > half_span or y < -half_span or y > half_span:
+            return False
+        j = int(np.clip(((x + half_span) / (2.0 * half_span)) * (w - 1), 0, w - 1))
+        i = int(np.clip(((half_span - y) / (2.0 * half_span)) * (h - 1), 0, h - 1))
+        return bool(mask[i, j])
 
     def _load_circle8_obstacle_mask(self):
         if self._circle8_obstacle_mask_loaded:
@@ -417,7 +441,7 @@ class UAVFireEnv(gym.Env):
         return None
 
     def _draw_background_layer(self, ax):
-        if 'circle8' not in str(self.env_name).lower():
+        if not self._is_circle8_env():
             return
         mask = self._load_circle8_obstacle_mask()
         if mask is None or mask.size == 0:
@@ -433,12 +457,12 @@ class UAVFireEnv(gym.Env):
             vmin=0.0,
             vmax=1.0,
             origin='upper',
-            extent=[-self.radius, self.radius, -self.radius, self.radius],
+            extent=[-15000.0, 15000.0, -15000.0, 15000.0],
             interpolation='nearest',
             alpha=1.0,
             zorder=0,
         )
-        clip_circle = mpatches.Circle((0.0, 0.0), self.radius, transform=ax.transData)
+        clip_circle = mpatches.Circle((0.0, 0.0), 15000.0, transform=ax.transData)
         img.set_clip_path(clip_circle)
 
     # ─────────────────────────────────────────────────────────────────────────

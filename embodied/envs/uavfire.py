@@ -52,7 +52,7 @@ class UAVFire(embodied.Env):
             elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
             return_metadata=True)
       elif task == 'circle8':
-        elev_dir = os.path.join(ROOT, 'prepare', 'elevation')
+        elev_dir = os.path.join(UAV_DIR, 'prepare', 'elevation')
         if os.path.isdir(elev_dir):
           tif_candidates = sorted(f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff', '.zip')))
           if tif_candidates:

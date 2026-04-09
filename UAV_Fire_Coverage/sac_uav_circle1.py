@@ -64,8 +64,7 @@ def env_step(env, action):
 
 # ── argument parser ───────────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-PREPARE_DIR = os.path.join(BASE_DIR, 'prepare')
+PREPARE_DIR = os.path.join(SCRIPT_DIR, 'prepare')
 
 parser = argparse.ArgumentParser(description='SAC — Circle 1 multi-UAV fire coverage')
 parser.add_argument('--center_csv',
