@@ -116,7 +116,7 @@ class UAVFire(embodied.Env):
     self._last_infos = [{} for _ in range(self._num_uavs)]
     print(
         f'[Dreamer UAVFire] Centralized control enabled: '
-        f'{self._num_uavs} UAV(s), action_dim={self._single_action_dim * self._num_uavs}'
+        f'{self._num_uavs} UAVs, action_dim={self._single_action_dim * self._num_uavs}'
     )
     log_dir = os.path.join(UAV_DIR, 'logs')
     scenario_name = 'Circle8' if task == 'circle8' else 'Circle1'
