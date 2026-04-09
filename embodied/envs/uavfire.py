@@ -42,29 +42,48 @@ class UAVFire(embodied.Env):
     self._episode_reward = 0.0
     self._episode_steps = 0
     self._total_steps = 0
-    use_real = bool(center_csv) and bool(points_file) and os.path.exists(center_csv) and os.path.exists(points_file)
+    default_center_csv = os.path.join(
+        UAV_DIR, 'prepare', 'circle_8_center.csv' if task == 'circle8' else 'circle_1_center.csv')
+    default_points_file = os.path.join(
+        UAV_DIR, 'prepare', 'circle_8_points.shp' if task == 'circle8' else 'circle_1_points.shp')
+    effective_center_csv = center_csv if center_csv else default_center_csv
+    effective_points_file = points_file if points_file else default_points_file
+    use_real = (
+        bool(effective_center_csv) and bool(effective_points_file) and
+        os.path.exists(effective_center_csv) and os.path.exists(effective_points_file)
+    )
     lat_c = None
     lon_c = None
     dem_query_metadata = None
     if use_real:
       kwargs = {} if circle_id == -1 else {'circle_id': int(circle_id)}
-      lat_c, lon_c, radius, fire_points = load_circle_data(center_csv, points_file, **kwargs)
+      lat_c, lon_c, radius, fire_points = load_circle_data(
+          effective_center_csv, effective_points_file, **kwargs)
       obstacle_map = None
-      if task == 'circle8' and elevation_tif and os.path.exists(elevation_tif):
-        obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
-            elevation_tif, lat_c, lon_c, region_radius_m=radius,
-            elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
-            return_metadata=True)
-      elif task == 'circle8':
-        elev_dir = os.path.join(UAV_DIR, 'prepare', 'elevation')
-        if os.path.isdir(elev_dir):
-          tif_candidates = sorted(f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff', '.zip')))
-          if tif_candidates:
-            tif_path = os.path.join(elev_dir, tif_candidates[0])
-            obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
-                tif_path, lat_c, lon_c, region_radius_m=radius,
-                elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
-                return_metadata=True)
+      if task == 'circle8':
+        effective_elevation_tif = elevation_tif if (elevation_tif and os.path.exists(elevation_tif)) else ''
+        if not effective_elevation_tif:
+          candidates = []
+          elev_dir = os.path.join(UAV_DIR, 'prepare', 'elevation')
+          if os.path.isdir(elev_dir):
+            candidates.extend(
+                os.path.join(elev_dir, f)
+                for f in sorted(os.listdir(elev_dir))
+                if f.lower().endswith(('.tif', '.tiff', '.zip')))
+          prepare_dir = os.path.join(UAV_DIR, 'prepare')
+          if os.path.isdir(prepare_dir):
+            candidates.extend(
+                os.path.join(prepare_dir, f)
+                for f in sorted(os.listdir(prepare_dir))
+                if f.lower().endswith(('.tif', '.tiff', '.zip')))
+          candidates = [p for p in candidates if os.path.exists(p)]
+          if candidates:
+            effective_elevation_tif = candidates[0]
+        if effective_elevation_tif:
+          obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
+              effective_elevation_tif, lat_c, lon_c, region_radius_m=radius,
+              elevation_threshold=elev_threshold, target_resolution_m=resolution_m,
+              return_metadata=True)
     else:
       if task == 'circle8':
         (_, _, radius), fire_points, obstacle_map, resolution_m = generate_sample_circle8_data()

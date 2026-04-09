@@ -325,15 +325,10 @@ class UAVFireEnv(gym.Env):
         ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
         colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
         group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
-        if self.env_name.lower() != 'circle1':
-            unv = self.fire_points[~self.visited]
-            vis = self.fire_points[self.visited]
-            if len(unv):
-                ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
-            if len(vis):
-                ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
-        else:
-            ids = sorted(group.keys())
+        ids = sorted(group.keys())
+        show_multi_uav = bool(ids) and (len(ids) > 1 or self.env_name.lower() == 'circle1')
+        if show_multi_uav:
+            added_unvisited_label = False
             for idx, env_id in enumerate(ids):
                 item = group[env_id]
                 fp = item.get('fire_points', np.zeros((0, 2), dtype=np.float32))
@@ -344,47 +339,44 @@ class UAVFireEnv(gym.Env):
                 unv = fp[~vm]
                 vis = fp[vm]
                 if len(unv):
-                    ax.scatter(unv[:, 0], unv[:, 1], c='lightcoral', s=20, alpha=0.35, zorder=2)
+                    ax.scatter(
+                        unv[:, 0], unv[:, 1], c='lightcoral', s=20, alpha=0.35, zorder=2,
+                        label='Unvisited' if not added_unvisited_label else None,
+                    )
+                    added_unvisited_label = True
                 if len(vis):
-                    ax.scatter(vis[:, 0], vis[:, 1], c=color, s=28, marker='o', zorder=4,
-                               label=f'UAV{idx + 1} Visited')
+                    ax.scatter(
+                        vis[:, 0], vis[:, 1], c=color, s=28, marker='o', zorder=4,
+                        label=f'UAV{idx + 1} Visited',
+                    )
+        else:
+            unv = self.fire_points[~self.visited]
+            vis = self.fire_points[self.visited]
+            if len(unv):
+                ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
+            if len(vis):
+                ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
 
-        if self.env_name.lower() != 'circle1' and len(self._trajectory) > 1:
-            traj = np.array(self._trajectory, dtype=np.float32)
-            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
-        if self.env_name.lower() == 'circle1':
-            ids = sorted(group.keys())
+        if show_multi_uav:
             for idx, env_id in enumerate(ids):
                 tr = np.asarray(group[env_id].get('trajectory', []), dtype=np.float32)
                 if len(tr) <= 1:
                     continue
                 color = colors[idx % len(colors)]
-                ax.plot(tr[:, 0], tr[:, 1], '-', lw=1.5, alpha=0.85, color=color,
-                        label=f'UAV{idx + 1} Trajectory')
+                ax.plot(
+                    tr[:, 0], tr[:, 1], '-', lw=1.5, alpha=0.85, color=color,
+                    label=f'UAV{idx + 1} Trajectory',
+                )
                 birds = np.asarray(group[env_id].get('bird_trail_last', []), dtype=np.float32)
                 if len(birds):
                     ax.scatter(birds[:, 0], birds[:, 1], marker='^', c='red', s=26, zorder=5)
+        elif len(self._trajectory) > 1:
+            traj = np.array(self._trajectory, dtype=np.float32)
+            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
 
         if self.num_birds > 0:
             ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], marker='^',
                        c='red', s=36, zorder=6, label='Birds')
-        if self._wind_history:
-            wind_arr = np.array(self._wind_history, dtype=np.float32)
-            wind_mean = np.mean(wind_arr, axis=0)
-            wind_peak = float(np.max(np.linalg.norm(wind_arr, axis=1)))
-            anchor = np.array([-self.radius * 0.9, self.radius * 0.9], dtype=np.float32)
-            ax.quiver(
-                [anchor[0]], [anchor[1]], [wind_mean[0]], [wind_mean[1]],
-                angles='xy', scale_units='xy', scale=1.0,
-                color='darkorange', width=0.007, zorder=6, label='Mean Wind'
-            )
-            ax.text(
-                anchor[0], anchor[1] - self.radius * 0.12,
-                f'Wind mean=({wind_mean[0]:.1f},{wind_mean[1]:.1f}) m/s\n'
-                f'Wind peak={wind_peak:.1f} m/s',
-                color='darkorange', fontsize=9, ha='left', va='top',
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='darkorange')
-            )
 
         lim = self.radius * 1.15
         ax.set_xlim(-lim, lim)
@@ -749,13 +741,49 @@ class UAVFireEnv(gym.Env):
                                      fill=False, color='steelblue', lw=2))
 
         # Fire points
-        unv = self.fire_points[~self.visited]
-        vis = self.fire_points[self.visited]
-        if len(unv): ax.scatter(unv[:, 0], unv[:, 1], c='red',   s=40, zorder=3, label='Unvisited')
-        if len(vis): ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=40, zorder=3, label='Visited')
+        colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
+        group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
+        ids = sorted(group.keys())
+        show_multi_uav = bool(ids) and (len(ids) > 1 or self.env_name.lower() == 'circle1')
+        if show_multi_uav:
+            added_unvisited_label = False
+            for idx, env_id in enumerate(ids):
+                item = group[env_id]
+                fp = np.asarray(item.get('fire_points', []), dtype=np.float32)
+                vm = np.asarray(item.get('visited_mask', []), dtype=bool)
+                if len(fp) == 0 or len(vm) != len(fp):
+                    continue
+                unv = fp[~vm]
+                vis = fp[vm]
+                color = colors[idx % len(colors)]
+                if len(unv):
+                    ax.scatter(
+                        unv[:, 0], unv[:, 1], c='lightcoral', s=24, alpha=0.35, zorder=2,
+                        label='Unvisited' if not added_unvisited_label else None,
+                    )
+                    added_unvisited_label = True
+                if len(vis):
+                    ax.scatter(
+                        vis[:, 0], vis[:, 1], c=color, s=32, zorder=3,
+                        label=f'UAV{idx + 1} Visited',
+                    )
+        else:
+            unv = self.fire_points[~self.visited]
+            vis = self.fire_points[self.visited]
+            if len(unv):
+                ax.scatter(unv[:, 0], unv[:, 1], c='red', s=40, zorder=3, label='Unvisited')
+            if len(vis):
+                ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=40, zorder=3, label='Visited')
 
         # Trajectory
-        if len(self._trajectory) > 1:
+        if show_multi_uav:
+            for idx, env_id in enumerate(ids):
+                tr = np.asarray(group[env_id].get('trajectory', []), dtype=np.float32)
+                if len(tr) <= 1:
+                    continue
+                color = colors[idx % len(colors)]
+                ax.plot(tr[:, 0], tr[:, 1], '-', lw=0.9, alpha=0.7, color=color, label=f'UAV{idx + 1} Trajectory')
+        elif len(self._trajectory) > 1:
             traj = np.array(self._trajectory)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
         if self.num_birds > 0:
