@@ -67,7 +67,9 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    self._num_uavs = max(1, int(num_uavs))
+    self._num_uavs = int(num_uavs)
+    if self._num_uavs < 1:
+      raise ValueError(f'num_uavs must be >= 1, got {num_uavs!r}')
     clusters = self._cluster_fire_points(fire_points, self._num_uavs)
     self._envs = []
     for cluster in clusters:
@@ -192,12 +194,10 @@ class UAVFire(embodied.Env):
   def _split_actions(self, action):
     act = np.asarray(action, dtype=np.float32).reshape(-1)
     expected = self._single_action_dim * self._num_uavs
-    if act.size == self._single_action_dim:
-      act = np.tile(act, self._num_uavs)
-    elif act.size < expected:
-      act = np.pad(act, (0, expected - act.size), mode='constant')
-    elif act.size > expected:
-      act = act[:expected]
+    if act.size != expected:
+      raise ValueError(
+          f'Expected centralized action size {expected} for {self._num_uavs} UAV(s), '
+          f'got {act.size}.')
     act = np.clip(act, -1.0, 1.0).astype(np.float32)
     return [act[i * self._single_action_dim:(i + 1) * self._single_action_dim]
             for i in range(self._num_uavs)]
