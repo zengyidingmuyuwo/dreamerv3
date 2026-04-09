@@ -2,6 +2,7 @@ import os
 import numpy as np
 
 from uav_fire_env import UAVFireEnv
+from uav_fire_obstacle_env import UAVFireObstacleEnv
 
 
 def test_step_adds_wind_displacement_with_time_pattern():
@@ -84,3 +85,35 @@ def test_reset_starts_exactly_at_center_without_random_offset():
   obs2 = out2[0] if isinstance(out2, tuple) else out2
   np.testing.assert_allclose(env.pos, np.array([0.0, 0.0], dtype=np.float32), atol=1e-8)
   assert obs1 is not None and obs2 is not None
+
+
+def test_obs_is_clipped_to_space_bounds_for_uavfire_env():
+  env = UAVFireEnv(
+      fire_points=np.array([[1000.0, 200.0], [1100.0, -150.0]], dtype=np.float32),
+      radius=5000.0,
+      return_dict_obs=True,
+  )
+  env.reset(seed=0)
+  env.pos = np.array([env.radius * 1.2, -env.radius * 1.3], dtype=np.float32)
+  obs = env._get_obs()
+  assert np.min(obs['image']) >= -1.0
+  assert np.max(obs['image']) <= 1.0
+  assert np.min(obs['vector']) >= -1.0
+  assert np.max(obs['vector']) <= 1.0
+
+
+def test_obs_is_clipped_to_space_bounds_for_obstacle_env():
+  env = UAVFireObstacleEnv(
+      fire_points=np.array([[100.0, 100.0], [200.0, -50.0]], dtype=np.float32),
+      radius=2000.0,
+      obstacle_map=np.zeros((64, 64), dtype=bool),
+      resolution_m=50.0,
+      return_dict_obs=True,
+  )
+  env.reset(seed=0)
+  env.pos = np.array([env.radius * 1.4, -env.radius * 1.5], dtype=np.float32)
+  obs = env._get_obs()
+  assert np.min(obs['image']) >= -1.0
+  assert np.max(obs['image']) <= 1.0
+  assert np.min(obs['vector']) >= -1.0
+  assert np.max(obs['vector']) <= 1.0

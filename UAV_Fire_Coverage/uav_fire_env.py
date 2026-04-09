@@ -461,8 +461,16 @@ class UAVFireEnv(gym.Env):
         ]).astype(np.float32)
         vec = self._waypoint_vector()
         if self.return_dict_obs:
-            return {'image': obs, 'vector': vec}
-        return np.concatenate([obs, vec]).astype(np.float32)
+            return self._clip_observation({'image': obs, 'vector': vec})
+        return self._clip_observation(np.concatenate([obs, vec]).astype(np.float32))
+
+    def _clip_observation(self, obs):
+        if isinstance(obs, dict):
+            return {
+                'image': np.clip(obs['image'], -1.0, 1.0).astype(np.float32),
+                'vector': np.clip(obs['vector'], -1.0, 1.0).astype(np.float32),
+            }
+        return np.clip(obs, -1.0, 1.0).astype(np.float32)
 
     def _compute_wind_velocity(self):
         t = float(self.step_count)

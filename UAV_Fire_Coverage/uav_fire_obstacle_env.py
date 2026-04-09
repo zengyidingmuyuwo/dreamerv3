@@ -233,8 +233,8 @@ class UAVFireObstacleEnv(UAVFireEnv):
         sensors  = self._obstacle_sensors()
         if self.return_dict_obs:
             img = np.concatenate([base_obs['image'], sensors]).astype(np.float32)
-            return {'image': img, 'vector': base_obs['vector']}
-        return np.concatenate([base_obs, sensors]).astype(np.float32)
+            return self._clip_observation({'image': img, 'vector': base_obs['vector']})
+        return self._clip_observation(np.concatenate([base_obs, sensors]).astype(np.float32))
 
     # ─────────────────────────────────────────────────────────────────────────
 
