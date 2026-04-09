@@ -35,7 +35,7 @@ defaults:
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
     dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
-    uavfire: {center_csv: '', points_file: '', elevation_tif: '', circle_id: -1, elev_threshold: 2000.0, num_nearest: 6, resolution_m: 50.0}
+    uavfire: {center_csv: '', points_file: '', elevation_tif: '', circle_id: -1, elev_threshold: 2000.0, num_nearest: 6, resolution_m: 50.0, num_uavs: 3}
 
   replay:
     size: 5e6

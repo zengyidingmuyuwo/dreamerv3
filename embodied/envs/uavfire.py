@@ -27,6 +27,7 @@ class UAVFire(embodied.Env):
       elev_threshold=2000.0,
       num_nearest=6,
       resolution_m=50.0,
+      num_uavs=3,
       seed=None,
   ):
     assert task in ('circle1', 'circle8'), task
@@ -66,16 +67,31 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    if task == 'circle8':
-      self._env = UAVFireObstacleEnv(
-          fire_points=fire_points, radius=radius, obstacle_map=obstacle_map,
-          resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
-          algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
-          elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
-    else:
-      self._env = UAVFireEnv(
-          fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
-          algorithm_name='DREAMER', env_name='Circle1')
+    self._num_uavs = max(1, int(num_uavs))
+    clusters = self._cluster_fire_points(fire_points, self._num_uavs)
+    self._envs = []
+    for cluster in clusters:
+      if task == 'circle8':
+        env = UAVFireObstacleEnv(
+            fire_points=cluster, radius=radius, obstacle_map=obstacle_map,
+            resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
+            algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
+            elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
+      else:
+        env = UAVFireEnv(
+            fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
+            algorithm_name='DREAMER', env_name='Circle1')
+      self._envs.append(env)
+    self._num_uavs = len(self._envs)
+    self._env = self._envs[0]
+    self._single_action_dim = int(self._env.action_space.shape[0])
+    self._single_image_dim = int(self._env.observation_space['image'].shape[0])
+    self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
+    self._last_infos = [{} for _ in range(self._num_uavs)]
+    print(
+        f'[Dreamer UAVFire] Centralized control enabled: '
+        f'{self._num_uavs} UAV(s), action_dim={self._single_action_dim * self._num_uavs}'
+    )
     log_dir = os.path.join(UAV_DIR, 'logs')
     scenario_name = 'Circle8' if task == 'circle8' else 'Circle1'
     self._episode_logger = EpisodeCSVLogger('DREAMER', scenario_name, log_dir)
@@ -83,8 +99,8 @@ class UAVFire(embodied.Env):
 
   @property
   def obs_space(self):
-    image_shape = self._env.observation_space['image'].shape
-    vector_shape = self._env.observation_space['vector'].shape
+    image_shape = (self._single_image_dim * self._num_uavs,)
+    vector_shape = (self._single_vector_dim * self._num_uavs,)
     return {
         'image': elements.Space(np.float32, image_shape, -1.0, 1.0),
         'vector': elements.Space(np.float32, vector_shape, -1.0, 1.0),
@@ -97,7 +113,7 @@ class UAVFire(embodied.Env):
   @property
   def act_space(self):
     return {
-        'action': elements.Space(np.float32, self._env.action_space.shape, -1.0, 1.0),
+        'action': elements.Space(np.float32, (self._single_action_dim * self._num_uavs,), -1.0, 1.0),
         'reset': elements.Space(bool),
     }
 
@@ -106,18 +122,25 @@ class UAVFire(embodied.Env):
       self._done = False
       self._episode_reward = 0.0
       self._episode_steps = 0
-      out = self._env.reset()
-      if isinstance(out, tuple):
-        obs, _ = out
-      else:
-        obs = out
+      obs = self._reset_all()
       return self._obs(obs, 0.0, is_first=True)
-    out = self._env.step(action['action'])
-    if len(out) == 5:
-      obs, reward, terminated, truncated, self._info = out
-      done = bool(terminated or truncated)
-    else:
-      obs, reward, done, self._info = out
+    actions = self._split_actions(action['action'])
+    obs_list, rewards, dones, infos = [], [], [], []
+    for env, sub_action in zip(self._envs, actions):
+      out = env.step(sub_action)
+      if len(out) == 5:
+        obs_i, reward_i, terminated_i, truncated_i, info_i = out
+        done_i = bool(terminated_i or truncated_i)
+      else:
+        obs_i, reward_i, done_i, info_i = out
+      obs_list.append(obs_i)
+      rewards.append(float(reward_i))
+      dones.append(bool(done_i))
+      infos.append(info_i)
+    reward = float(np.sum(rewards))
+    self._last_infos = infos
+    self._info = self._merge_infos(infos)
+    done = bool(np.all(dones))
     self._episode_reward += float(reward)
     self._episode_steps += 1
     self._total_steps += 1
@@ -131,20 +154,90 @@ class UAVFire(embodied.Env):
           collision=bool(self._info.get('collision', False)),
       )
     self._done = done
-    return self._obs(obs, reward, is_last=done, is_terminal=done)
+    return self._obs(obs_list, reward, is_last=done, is_terminal=done)
 
   def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
+    if isinstance(obs, list):
+      image = np.concatenate(
+          [np.asarray(item['image'], dtype=np.float32) for item in obs], axis=0)
+      vector = np.concatenate(
+          [np.asarray(item['vector'], dtype=np.float32) for item in obs], axis=0)
+    else:
+      image = np.asarray(obs['image'], dtype=np.float32)
+      vector = np.asarray(obs['vector'], dtype=np.float32)
+    image = np.clip(image, -1.0, 1.0).astype(np.float32)
+    vector = np.clip(vector, -1.0, 1.0).astype(np.float32)
     return {
-        'image': np.asarray(obs['image'], dtype=np.float32),
-        'vector': np.asarray(obs['vector'], dtype=np.float32),
+        'image': image,
+        'vector': vector,
         'reward': np.float32(reward),
         'is_first': is_first,
         'is_last': is_last,
         'is_terminal': is_terminal,
     }
 
-  def close(self):
+  def _reset_all(self):
+    obs_list = []
+    for env in self._envs:
+      out = env.reset()
+      if isinstance(out, tuple):
+        obs, _ = out
+      else:
+        obs = out
+      obs_list.append(obs)
+    self._last_infos = [{} for _ in range(self._num_uavs)]
+    self._info = self._merge_infos(self._last_infos)
+    return obs_list
+
+  def _split_actions(self, action):
+    act = np.asarray(action, dtype=np.float32).reshape(-1)
+    expected = self._single_action_dim * self._num_uavs
+    if act.size == self._single_action_dim:
+      act = np.tile(act, self._num_uavs)
+    elif act.size < expected:
+      act = np.pad(act, (0, expected - act.size), mode='constant')
+    elif act.size > expected:
+      act = act[:expected]
+    act = np.clip(act, -1.0, 1.0).astype(np.float32)
+    return [act[i * self._single_action_dim:(i + 1) * self._single_action_dim]
+            for i in range(self._num_uavs)]
+
+  def _merge_infos(self, infos):
+    if not infos:
+      return {}
+    total_fire = int(sum(int(info.get('total_fire_points', 0)) for info in infos))
+    total_visited = int(sum(int(info.get('visited_count', 0)) for info in infos))
+    coverage = (float(total_visited) / float(total_fire)) if total_fire else 0.0
+    return {
+        'visited_count': total_visited,
+        'total_fire_points': total_fire,
+        'step': max((int(info.get('step', 0)) for info in infos), default=0),
+        'coverage_rate': coverage,
+        'collision': any(bool(info.get('collision', False)) for info in infos),
+        'mountain_collision': any(bool(info.get('mountain_collision', False)) for info in infos),
+        'bird_collision': any(bool(info.get('bird_collision', False)) for info in infos),
+        'off_path': any(bool(info.get('off_path', False)) for info in infos),
+        'per_uav_info': infos,
+    }
+
+  @staticmethod
+  def _cluster_fire_points(fire_points, num_uavs):
+    points = np.asarray(fire_points, dtype=np.float32)
+    if len(points) == 0 or num_uavs <= 1:
+      return [points]
+    n_clusters = min(int(num_uavs), len(points))
     try:
-      self._env.close()
+      from sklearn.cluster import KMeans
+      labels = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto').fit_predict(points)
     except Exception:
-      pass
+      labels = np.arange(len(points)) % n_clusters
+    clusters = [points[labels == idx] for idx in range(n_clusters)]
+    clusters = [cluster for cluster in clusters if len(cluster) > 0]
+    return clusters if clusters else [points]
+
+  def close(self):
+    for env in self._envs:
+      try:
+        env.close()
+      except Exception:
+        pass
