@@ -146,19 +146,58 @@ def test_render_does_not_draw_red_bird_trail_lines():
   assert red_trail_calls['count'] == 0
 
 
-def test_obstacle_overlay_is_clipped_to_circle():
-  env = UAVFireObstacleEnv(
+def test_render_does_not_draw_radar_dashed_circle():
+  import matplotlib.axes
+  import matplotlib.patches
+  env = UAVFireEnv(
+      fire_points=np.array([[1000.0, 0.0]], dtype=np.float32),
+      radius=5000.0,
+      num_birds=1,
+  )
+  env.reset(seed=0)
+  old_add_patch = matplotlib.axes.Axes.add_patch
+  dashed_radar_calls = {'count': 0}
+
+  def wrapped_add_patch(self, patch):
+    if isinstance(patch, matplotlib.patches.Circle) and patch.get_linestyle() == '--':
+      dashed_radar_calls['count'] += 1
+    return old_add_patch(self, patch)
+
+  matplotlib.axes.Axes.add_patch = wrapped_add_patch
+  try:
+    env.render()
+  finally:
+    matplotlib.axes.Axes.add_patch = old_add_patch
+    env.close()
+  assert dashed_radar_calls['count'] == 0
+
+
+def test_circle8_background_loads_preprocessed_mask_and_sets_clip_path():
+  import tempfile
+  import matplotlib.pyplot as plt
+
+  env = UAVFireEnv(
       fire_points=np.array([[0.0, 0.0]], dtype=np.float32),
       radius=200.0,
-      obstacle_map=np.ones((64, 64), dtype=bool),
-      resolution_m=10.0,
-      return_dict_obs=True,
       env_name='Circle8',
+      num_birds=0,
   )
-  xx, yy, mask = env._get_mountain_overlay()
-  assert mask.shape == xx.shape == yy.shape
-  assert np.any(mask)
-  assert not bool(mask[0, 0])
-  assert not bool(mask[0, -1])
-  assert not bool(mask[-1, 0])
-  assert not bool(mask[-1, -1])
+  mask = np.zeros((32, 32), dtype=np.uint8)
+  mask[10:22, 10:22] = 1
+  tmp = tempfile.NamedTemporaryFile(suffix='.npy', delete=False)
+  tmp.close()
+  np.save(tmp.name, mask)
+  old_candidates = env._circle8_obstacle_mask_candidates
+  env._circle8_obstacle_mask_candidates = lambda: [tmp.name]
+  env._circle8_obstacle_mask = None
+  env._circle8_obstacle_mask_loaded = False
+
+  fig, ax = plt.subplots(figsize=(4, 4))
+  try:
+    env._draw_background_layer(ax)
+    assert len(ax.images) == 1
+    assert ax.images[0].get_clip_path() is not None
+  finally:
+    env._circle8_obstacle_mask_candidates = old_candidates
+    plt.close(fig)
+    os.remove(tmp.name)

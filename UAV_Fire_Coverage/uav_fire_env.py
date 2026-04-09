@@ -174,6 +174,8 @@ class UAVFireEnv(gym.Env):
         self._birds_pos = np.zeros((self.num_birds, 2), dtype=np.float32)
         self._birds_vel = np.zeros((self.num_birds, 2), dtype=np.float32)
         self._bird_trails = [[] for _ in range(self.num_birds)]
+        self._circle8_obstacle_mask = None
+        self._circle8_obstacle_mask_loaded = False
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -356,11 +358,6 @@ class UAVFireEnv(gym.Env):
                 if len(birds):
                     ax.scatter(birds[:, 0], birds[:, 1], marker='^', c='red', s=26, zorder=5)
 
-        ax.add_patch(mpatches.Circle(
-            (self.pos[0], self.pos[1]), self.radar_range_m,
-            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
-            alpha=0.7, zorder=2, label='Radar Range'
-        ))
         if self.num_birds > 0:
             ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], marker='^',
                        c='red', s=36, zorder=6, label='Birds')
@@ -396,9 +393,53 @@ class UAVFireEnv(gym.Env):
         plt.close(fig)
         print(f'[Trajectory] Saved snapshot: {abs_path}')
 
+    def _circle8_obstacle_mask_candidates(self):
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return [
+            os.path.join(base_dir, 'prepare', 'circle8_obstacle_mask.npy'),
+            os.path.join(base_dir, 'UAV_Fire_Coverage', 'prepare', 'circle8_obstacle_mask.npy'),
+        ]
+
+    def _load_circle8_obstacle_mask(self):
+        if self._circle8_obstacle_mask_loaded:
+            return self._circle8_obstacle_mask
+        self._circle8_obstacle_mask_loaded = True
+        for path in self._circle8_obstacle_mask_candidates():
+            if not os.path.exists(path):
+                continue
+            try:
+                arr = np.load(path)
+                if arr.ndim == 2:
+                    self._circle8_obstacle_mask = arr.astype(bool)
+                    return self._circle8_obstacle_mask
+            except Exception:
+                continue
+        return None
+
     def _draw_background_layer(self, ax):
-        del ax
-        return
+        if 'circle8' not in str(self.env_name).lower():
+            return
+        mask = self._load_circle8_obstacle_mask()
+        if mask is None or mask.size == 0:
+            return
+        try:
+            import matplotlib.patches as mpatches
+        except ImportError:
+            return
+        masked = np.ma.masked_where(~mask, np.ones(mask.shape, dtype=np.float32))
+        img = ax.imshow(
+            masked,
+            cmap='Greys',
+            vmin=0.0,
+            vmax=1.0,
+            origin='upper',
+            extent=[-self.radius, self.radius, -self.radius, self.radius],
+            interpolation='nearest',
+            alpha=1.0,
+            zorder=0,
+        )
+        clip_circle = mpatches.Circle((0.0, 0.0), self.radius, transform=ax.transData)
+        img.set_clip_path(clip_circle)
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -693,11 +734,6 @@ class UAVFireEnv(gym.Env):
         if len(self._trajectory) > 1:
             traj = np.array(self._trajectory)
             ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
-        ax.add_patch(mpatches.Circle(
-            (self.pos[0], self.pos[1]), self.radar_range_m,
-            fill=False, linestyle='--', linewidth=1.0, edgecolor='gray',
-            alpha=0.65, zorder=2
-        ))
         if self.num_birds > 0:
             ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], c='red', s=48, marker='^', zorder=6, label='Birds')
 
