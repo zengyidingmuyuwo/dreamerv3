@@ -383,9 +383,114 @@ class UAVFireObstacleEnv(UAVFireEnv):
         return float(np.min(sensors) * self.MAX_SENSOR_RANGE)
 
     def _save_trajectory_snapshot(self, save_path, coverage_rate, title_prefix):
-        super()._save_trajectory_snapshot(save_path, coverage_rate, title_prefix)
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+        except ImportError:
+            abs_path = os.path.abspath(save_path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, 'wb') as f:
+                f.write(b'')
+            print(f'[Trajectory] Matplotlib unavailable, created placeholder: {abs_path}')
+            return
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        self._draw_background_layer(ax)
+        ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
+
+        unv = self.fire_points[~self.visited]
+        vis = self.fire_points[self.visited]
+        if len(unv):
+            ax.scatter(unv[:, 0], unv[:, 1], c='red', s=30, zorder=3, label='Unvisited')
+        if len(vis):
+            ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=30, zorder=3, label='Visited')
+
+        if len(self._trajectory) > 1:
+            traj = np.array(self._trajectory, dtype=np.float32)
+            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=1.0, alpha=0.8, label='Trajectory')
+
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], marker='^',
+                       c='red', s=36, zorder=6, label='Birds')
+
+        if self._wind_history:
+            wind_arr = np.array(self._wind_history, dtype=np.float32)
+            wind_mean = np.mean(wind_arr, axis=0)
+            wind_peak = float(np.max(np.linalg.norm(wind_arr, axis=1)))
+            anchor = np.array([-self.radius * 0.9, self.radius * 0.9], dtype=np.float32)
+            ax.quiver(
+                [anchor[0]], [anchor[1]], [wind_mean[0]], [wind_mean[1]],
+                angles='xy', scale_units='xy', scale=1.0,
+                color='darkorange', width=0.007, zorder=6, label='Mean Wind'
+            )
+            ax.text(
+                anchor[0], anchor[1] - self.radius * 0.12,
+                f'Wind mean=({wind_mean[0]:.1f},{wind_mean[1]:.1f}) m/s\n'
+                f'Wind peak={wind_peak:.1f} m/s',
+                color='darkorange', fontsize=9, ha='left', va='top',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='darkorange')
+            )
+
+        lim = self.radius * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect('equal')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.set_title(
+            f'{title_prefix} | score={self._current_ep_score:.2f} | '
+            f'coverage={coverage_rate * 100:.1f}%'
+        )
+        abs_path = os.path.abspath(save_path)
+        plt.savefig(abs_path, dpi=300)
+        plt.close(fig)
+        print(f'[Trajectory] Saved snapshot: {abs_path}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
     def render(self, mode='human'):
-        super().render(mode=mode)
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+        except ImportError:
+            return
+
+        if not hasattr(self, '_fig') or self._fig is None:
+            self._fig, self._ax = plt.subplots(figsize=(7, 7))
+            plt.ion()
+
+        ax = self._ax
+        ax.clear()
+        self._draw_background_layer(ax)
+
+        ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
+
+        unv = self.fire_points[~self.visited]
+        vis = self.fire_points[self.visited]
+        if len(unv):
+            ax.scatter(unv[:, 0], unv[:, 1], c='red', s=40, zorder=3, label='Unvisited')
+        if len(vis):
+            ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=40, zorder=3, label='Visited')
+
+        if len(self._trajectory) > 1:
+            traj = np.array(self._trajectory)
+            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
+        if self.num_birds > 0:
+            ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1],
+                       c='red', s=48, marker='^', zorder=6, label='Birds')
+
+        ax.scatter(*self.pos, c='blue', s=120, marker='^', zorder=5)
+        aln = self.radius * 0.06
+        ax.annotate('', xy=(self.pos[0] + aln * np.cos(self.heading),
+                            self.pos[1] + aln * np.sin(self.heading)),
+                    xytext=self.pos,
+                    arrowprops=dict(arrowstyle='->', color='blue', lw=2))
+
+        lim = self.radius * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect('equal')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.set_title(f'UAV Fire Coverage  step={self.step_count}  '
+                     f'visited={np.sum(self.visited)}/{self.n_fire}')
+        self._fig.canvas.draw()
+        plt.pause(0.001)
