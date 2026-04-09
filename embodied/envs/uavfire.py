@@ -11,9 +11,13 @@ if UAV_DIR not in sys.path:
   sys.path.insert(0, UAV_DIR)
 
 from data_utils import load_circle_data, load_elevation_obstacle_map, generate_sample_circle1_data, generate_sample_circle8_data
-from uav_fire_env import UAVFireEnv
-from uav_fire_obstacle_env import UAVFireObstacleEnv
 from comparison_logging import EpisodeCSVLogger
+
+
+def _load_env_classes():
+  from uav_fire_env import UAVFireEnv
+  from uav_fire_obstacle_env import UAVFireObstacleEnv
+  return UAVFireEnv, UAVFireObstacleEnv
 
 
 class UAVFire(embodied.Env):
@@ -70,6 +74,7 @@ class UAVFire(embodied.Env):
     self._num_uavs = int(num_uavs)
     if self._num_uavs < 1:
       raise ValueError(f'num_uavs must be >= 1, got {num_uavs!r}')
+    UAVFireEnv, UAVFireObstacleEnv = _load_env_classes()
     clusters = self._cluster_fire_points(fire_points, self._num_uavs)
     self._envs = []
     for cluster in clusters:

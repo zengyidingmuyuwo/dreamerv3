@@ -35,9 +35,13 @@ import torch.optim as optim
 from torch.distributions import Normal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from uav_fire_env import UAVFireEnv
 from data_utils import (load_circle_data, generate_sample_circle1_data)
 from comparison_logging import EpisodeCSVLogger
+
+
+def _load_uav_fire_env_class():
+    from uav_fire_env import UAVFireEnv
+    return UAVFireEnv
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -322,6 +326,7 @@ def main():
     print(f'[SAC Circle1] {len(clusters)} clusters:  '
           + '  '.join(f'UAV{i+1}={len(c)}pts' for i, c in enumerate(clusters)))
 
+    UAVFireEnv = _load_uav_fire_env_class()
     envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='SAC', env_name='Circle1') for c in clusters]
     state_dim  = envs[0].observation_space.shape[0]
     action_dim = envs[0].action_space.shape[0]

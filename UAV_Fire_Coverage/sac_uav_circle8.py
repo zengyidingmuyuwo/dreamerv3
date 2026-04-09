@@ -29,10 +29,14 @@ import torch.optim as optim
 from torch.distributions import Normal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from uav_fire_obstacle_env import UAVFireObstacleEnv
 from data_utils import (load_circle_data, load_elevation_obstacle_map,
                         generate_sample_circle8_data)
 from comparison_logging import EpisodeCSVLogger
+
+
+def _load_uav_fire_obstacle_env_class():
+    from uav_fire_obstacle_env import UAVFireObstacleEnv
+    return UAVFireObstacleEnv
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -326,6 +330,7 @@ def main():
               f'obstacle_pixels={n_obs}')
 
     # ── Environment ───────────────────────────────────────────────────────────
+    UAVFireObstacleEnv = _load_uav_fire_obstacle_env_class()
     env = UAVFireObstacleEnv(
         fire_points=fire_points,
         radius=radius,
