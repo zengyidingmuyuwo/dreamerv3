@@ -312,6 +312,7 @@ class UAVFireEnv(gym.Env):
             return
 
         fig, ax = plt.subplots(figsize=(8, 8))
+        self._draw_background_layer(ax)
         ax.add_patch(mpatches.Circle((0, 0), self.radius, fill=False, color='steelblue', lw=2))
         colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:red']
         group = self._TRAJECTORY_REGISTRY.get(self._registry_key(), {})
@@ -394,6 +395,10 @@ class UAVFireEnv(gym.Env):
         plt.savefig(abs_path, dpi=300)
         plt.close(fig)
         print(f'[Trajectory] Saved snapshot: {abs_path}')
+
+    def _draw_background_layer(self, ax):
+        del ax
+        return
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -672,6 +677,7 @@ class UAVFireEnv(gym.Env):
 
         ax = self._ax
         ax.clear()
+        self._draw_background_layer(ax)
 
         # Boundary circle
         ax.add_patch(mpatches.Circle((0, 0), self.radius,
@@ -694,10 +700,6 @@ class UAVFireEnv(gym.Env):
         ))
         if self.num_birds > 0:
             ax.scatter(self._birds_pos[:, 0], self._birds_pos[:, 1], c='red', s=48, marker='^', zorder=6, label='Birds')
-            for i in range(self.num_birds):
-                bt = np.asarray(self._bird_trails[i], dtype=np.float32)
-                if len(bt) > 1:
-                    ax.plot(bt[:, 0], bt[:, 1], color='red', lw=0.8, alpha=0.25)
 
         # UAV
         ax.scatter(*self.pos, c='blue', s=120, marker='^', zorder=5)

@@ -117,3 +117,48 @@ def test_obs_is_clipped_to_space_bounds_for_obstacle_env():
   assert np.max(obs['image']) <= 1.0
   assert np.min(obs['vector']) >= -1.0
   assert np.max(obs['vector']) <= 1.0
+
+
+def test_render_does_not_draw_red_bird_trail_lines():
+  import matplotlib.axes
+  env = UAVFireEnv(
+      fire_points=np.array([[1000.0, 0.0]], dtype=np.float32),
+      radius=5000.0,
+      num_birds=2,
+  )
+  env.reset(seed=0)
+  for _ in range(3):
+    env.step(np.array([0.0], dtype=np.float32))
+  old_plot = matplotlib.axes.Axes.plot
+  red_trail_calls = {'count': 0}
+
+  def wrapped_plot(self, *args, **kwargs):
+    if kwargs.get('color') == 'red' and float(kwargs.get('alpha', 1.0)) <= 0.25:
+      red_trail_calls['count'] += 1
+    return old_plot(self, *args, **kwargs)
+
+  matplotlib.axes.Axes.plot = wrapped_plot
+  try:
+    env.render()
+  finally:
+    matplotlib.axes.Axes.plot = old_plot
+    env.close()
+  assert red_trail_calls['count'] == 0
+
+
+def test_obstacle_overlay_is_clipped_to_circle():
+  env = UAVFireObstacleEnv(
+      fire_points=np.array([[0.0, 0.0]], dtype=np.float32),
+      radius=200.0,
+      obstacle_map=np.ones((64, 64), dtype=bool),
+      resolution_m=10.0,
+      return_dict_obs=True,
+      env_name='Circle8',
+  )
+  xx, yy, mask = env._get_mountain_overlay()
+  assert mask.shape == xx.shape == yy.shape
+  assert np.any(mask)
+  assert not bool(mask[0, 0])
+  assert not bool(mask[0, -1])
+  assert not bool(mask[-1, 0])
+  assert not bool(mask[-1, -1])

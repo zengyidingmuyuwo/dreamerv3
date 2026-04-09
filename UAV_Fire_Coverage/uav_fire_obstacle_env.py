@@ -83,6 +83,7 @@ class UAVFireObstacleEnv(UAVFireEnv):
         self.lon_center = float(lon_center) if lon_center is not None else None
         self.elevation_threshold = float(elevation_threshold)
         self.dem_query_metadata = dem_query_metadata
+        self._mountain_overlay_cache = None
 
         # Extend state dimension with NUM_SENSORS obstacle distances
         extra = self.NUM_SENSORS
@@ -98,6 +99,76 @@ class UAVFireObstacleEnv(UAVFireEnv):
             self.observation_space = spaces.Box(
                 low=-1.0, high=1.0, shape=(self.state_dim + self.vector_dim,), dtype=np.float32
             )
+
+    def _draw_background_layer(self, ax):
+        overlay = self._get_mountain_overlay()
+        if overlay is None:
+            return
+        xx, yy, mountain_mask = overlay
+        if not np.any(mountain_mask):
+            return
+        ax.contourf(
+            xx, yy, mountain_mask.astype(np.float32),
+            levels=[0.5, 1.5], colors=['black'], alpha=0.95, zorder=0,
+        )
+
+    def _get_mountain_overlay(self):
+        if self._mountain_overlay_cache is not None:
+            return self._mountain_overlay_cache
+        grid_size = int(max(128, min(600, np.ceil((2.0 * self.radius) / max(self.resolution_m, 1.0)))))
+        xs = np.linspace(-self.radius, self.radius, grid_size, dtype=np.float32)
+        ys = np.linspace(-self.radius, self.radius, grid_size, dtype=np.float32)
+        xx, yy = np.meshgrid(xs, ys)
+        circle_mask = (xx ** 2 + yy ** 2) <= (self.radius ** 2)
+        mountain_mask = np.zeros_like(circle_mask, dtype=bool)
+
+        # Preferred path: project local metric grid to WGS84 and query DEM elevations.
+        meta = self.dem_query_metadata
+        if meta and self.lat_center is not None and self.lon_center is not None:
+            try:
+                R = 111_000.0
+                lat = self.lat_center + (yy / R)
+                lon = self.lon_center + (xx / (R * np.cos(np.radians(self.lat_center))))
+                to_raster = meta.get('to_raster')
+                rowcol = meta.get('rowcol')
+                if to_raster is not None and rowcol is not None:
+                    rx, ry = to_raster.transform(lon, lat)
+                    row, col = rowcol(meta['transform'], rx, ry)
+                    row = np.asarray(row, dtype=np.int64)
+                    col = np.asarray(col, dtype=np.int64)
+                    valid = (
+                        circle_mask &
+                        (row >= 0) & (col >= 0) &
+                        (row < int(meta['height'])) & (col < int(meta['width']))
+                    )
+                    if np.any(valid):
+                        elev = np.full(xx.shape, np.nan, dtype=np.float32)
+                        elev_vals = meta['elevation'][row[valid], col[valid]].astype(np.float32)
+                        nodata = meta.get('nodata')
+                        if nodata is not None:
+                            bad = np.isclose(elev_vals, float(nodata))
+                            elev_vals[bad] = np.nan
+                        elev[valid] = elev_vals
+                        mountain_mask = np.isfinite(elev) & (elev >= self.elevation_threshold) & circle_mask
+            except Exception:
+                mountain_mask = np.zeros_like(circle_mask, dtype=bool)
+
+        # Fallback path: use precomputed local obstacle map if DEM query metadata is unavailable.
+        if not np.any(mountain_mask) and self.obstacle_map is not None:
+            h, w = self.obstacle_map.shape
+            cx, cy = w // 2, h // 2
+            jj = (cx + xx / self.resolution_m).astype(np.int64)
+            ii = (cy - yy / self.resolution_m).astype(np.int64)
+            valid = (
+                circle_mask &
+                (ii >= 0) & (jj >= 0) &
+                (ii < h) & (jj < w)
+            )
+            mountain_mask[valid] = self.obstacle_map[ii[valid], jj[valid]]
+            mountain_mask &= circle_mask
+
+        self._mountain_overlay_cache = (xx, yy, mountain_mask)
+        return self._mountain_overlay_cache
 
     # ─────────────────────────────────────────────────────────────────────────
 
