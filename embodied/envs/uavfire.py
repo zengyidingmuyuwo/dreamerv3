@@ -304,14 +304,15 @@ class UAVFire(embodied.Env):
 
   @staticmethod
   def _cluster_fire_points(fire_points, num_uavs):
-    points = np.asarray(fire_points, dtype=np.float32)
-    if len(points) == 0 or num_uavs <= 1:
+    points = np.asarray(fire_points)
+    if len(points) == 0:
       return [points]
-    n_clusters = min(int(num_uavs), len(points))
+    n_clusters = int(num_uavs)
     try:
       from sklearn.cluster import KMeans
-      labels = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto').fit_predict(points)
-    except Exception:
+      km = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto')
+      labels = km.fit_predict(points)
+    except ImportError:
       labels = np.arange(len(points)) % n_clusters
     clusters = [points[labels == idx] for idx in range(n_clusters)]
     clusters = [cluster for cluster in clusters if len(cluster) > 0]
