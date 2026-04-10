@@ -114,16 +114,27 @@ class UAVFire(embodied.Env):
             algorithm_name='DREAMER', env_name='Circle1')
       self._envs.append(env)
     self._num_uavs = len(self._envs)
-    self.num_agents = self._num_uavs
+    self._cluster_count = self._num_uavs
+    self._active_env_idx = -1
+    self._active_env = self._envs[0]
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._last_infos = [{} for _ in range(self._num_uavs)]
-    print(
-        f'[Dreamer UAVFire] Centralized control enabled: '
-        f'{self._num_uavs} UAVs, action_dim={self._single_action_dim * self._num_uavs}'
-    )
+    self._control_mode = 'single' if task == 'circle1' else 'centralized'
+    self.num_agents = 1 if self._control_mode == 'single' else self._num_uavs
+    self._last_infos = [{} for _ in range(self.num_agents)]
+    if self._control_mode == 'single':
+      print(
+          f'[Dreamer UAVFire] Non-cooperative clustered control enabled: '
+          f'{self._cluster_count} single-UAV clusters (round-robin), '
+          f'action_dim={self._single_action_dim}'
+      )
+    else:
+      print(
+          f'[Dreamer UAVFire] Centralized control enabled: '
+          f'{self._num_uavs} UAVs, action_dim={self._single_action_dim * self._num_uavs}'
+      )
     log_dir = os.path.join(UAV_DIR, 'logs')
     scenario_name = 'Circle8' if task == 'circle8' else 'Circle1'
     self._episode_logger = EpisodeCSVLogger('DREAMER', scenario_name, log_dir)
@@ -131,8 +142,12 @@ class UAVFire(embodied.Env):
 
   @property
   def obs_space(self):
-    image_shape = (self._single_image_dim * self._num_uavs,)
-    vector_shape = (self._single_vector_dim * self._num_uavs,)
+    if self._control_mode == 'single':
+      image_shape = (self._single_image_dim,)
+      vector_shape = (self._single_vector_dim,)
+    else:
+      image_shape = (self._single_image_dim * self._num_uavs,)
+      vector_shape = (self._single_vector_dim * self._num_uavs,)
     return {
         'image': elements.Space(np.float32, image_shape, -1.0, 1.0),
         'vector': elements.Space(np.float32, vector_shape, -1.0, 1.0),
@@ -144,8 +159,9 @@ class UAVFire(embodied.Env):
 
   @property
   def act_space(self):
+    action_dim = self._single_action_dim if self._control_mode == 'single' else self._single_action_dim * self._num_uavs
     return {
-        'action': elements.Space(np.float32, (self._single_action_dim * self._num_uavs,), -1.0, 1.0),
+        'action': elements.Space(np.float32, (action_dim,), -1.0, 1.0),
         'reset': elements.Space(bool),
     }
 
@@ -154,25 +170,40 @@ class UAVFire(embodied.Env):
       self._done = False
       self._episode_reward = 0.0
       self._episode_steps = 0
-      obs = self._reset_all()
+      obs = self._reset_single() if self._control_mode == 'single' else self._reset_all()
       return self._obs(obs, 0.0, is_first=True)
-    actions = self._split_actions(action['action'])
-    obs_list, rewards, dones, infos = [], [], [], []
-    for env, sub_action in zip(self._envs, actions):
-      out = env.step(sub_action)
+    if self._control_mode == 'single':
+      sub_action = self._split_actions(action['action'])
+      out = self._active_env.step(sub_action)
       if len(out) == 5:
-        obs_i, reward_i, terminated_i, truncated_i, info_i = out
-        done_i = bool(terminated_i or truncated_i)
+        obs, reward, terminated, truncated, info = out
+        done = bool(terminated or truncated)
       else:
-        obs_i, reward_i, done_i, info_i = out
-      obs_list.append(obs_i)
-      rewards.append(float(reward_i))
-      dones.append(bool(done_i))
-      infos.append(info_i)
-    reward = float(np.sum(rewards))
-    self._last_infos = infos
-    self._info = self._merge_infos(infos)
-    done = bool(np.all(dones))
+        obs, reward, done, info = out
+      reward = float(reward)
+      done = bool(done)
+      self._last_infos = [info]
+      self._info = self._merge_infos(self._last_infos)
+      self._info['active_cluster_index'] = int(self._active_env_idx)
+      self._info['num_clusters'] = int(self._cluster_count)
+    else:
+      actions = self._split_actions(action['action'])
+      obs_list, rewards, dones, infos = [], [], [], []
+      for env, sub_action in zip(self._envs, actions):
+        out = env.step(sub_action)
+        if len(out) == 5:
+          obs_i, reward_i, terminated_i, truncated_i, info_i = out
+          done_i = bool(terminated_i or truncated_i)
+        else:
+          obs_i, reward_i, done_i, info_i = out
+        obs_list.append(obs_i)
+        rewards.append(float(reward_i))
+        dones.append(bool(done_i))
+        infos.append(info_i)
+      reward = float(np.sum(rewards))
+      self._last_infos = infos
+      self._info = self._merge_infos(infos)
+      done = bool(np.all(dones))
     self._episode_reward += float(reward)
     self._episode_steps += 1
     self._total_steps += 1
@@ -186,7 +217,8 @@ class UAVFire(embodied.Env):
           collision=bool(self._info.get('collision', False)),
       )
     self._done = done
-    return self._obs(obs_list, reward, is_last=done, is_terminal=done)
+    packed_obs = obs if self._control_mode == 'single' else obs_list
+    return self._obs(packed_obs, reward, is_last=done, is_terminal=done)
 
   def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
     if isinstance(obs, list):
@@ -221,8 +253,28 @@ class UAVFire(embodied.Env):
     self._info = self._merge_infos(self._last_infos)
     return obs_list
 
+  def _reset_single(self):
+    if not self._envs:
+      raise RuntimeError('No UAV environments available to reset.')
+    self._active_env_idx = (self._active_env_idx + 1) % self._cluster_count
+    self._active_env = self._envs[self._active_env_idx]
+    out = self._active_env.reset()
+    obs = out[0] if isinstance(out, tuple) else out
+    self._last_infos = [{}]
+    self._info = self._merge_infos(self._last_infos)
+    self._info['active_cluster_index'] = int(self._active_env_idx)
+    self._info['num_clusters'] = int(self._cluster_count)
+    return obs
+
   def _split_actions(self, action):
     act = np.asarray(action, dtype=np.float32).reshape(-1)
+    if self._control_mode == 'single':
+      expected = self._single_action_dim
+      if act.size != expected:
+        raise ValueError(
+            f'Expected single-UAV action size {expected} in non-cooperative mode, '
+            f'got {act.size}.')
+      return np.clip(act, -1.0, 1.0).astype(np.float32)
     expected = self._single_action_dim * self._num_uavs
     if act.size != expected:
       raise ValueError(
