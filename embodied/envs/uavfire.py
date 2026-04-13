@@ -121,8 +121,8 @@ class UAVFire(embodied.Env):
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._control_mode = 'single' if task == 'circle1' else 'centralized'
-    self.num_agents = 1 if self._control_mode == 'single' else self._num_uavs
+    self._control_mode = 'centralized'
+    self.num_agents = self._num_uavs
     self._last_infos = [{} for _ in range(self.num_agents)]
     if self._control_mode == 'single':
       print(
