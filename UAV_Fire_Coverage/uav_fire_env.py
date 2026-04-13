@@ -55,6 +55,7 @@ from global_planner import DronePlanner
 class UAVFireEnv(gym.Env):
     """Single fixed-wing UAV fire-point coverage environment."""
     _TRAJECTORY_REGISTRY = {}
+    _SECTOR_AUTO_COUNTERS = {}
     RADAR_RANGE_M = 3000.0
     MAX_TRACKED_BIRDS = 3
     BIRD_SPEED_M_S = 14.0
@@ -107,7 +108,8 @@ class UAVFireEnv(gym.Env):
 
     def __init__(
         self, fire_points, radius, num_nearest=6, return_dict_obs=False,
-        algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3
+        algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3,
+        num_agents=None, agent_index=None
     ):
         """
         Parameters
@@ -122,13 +124,25 @@ class UAVFireEnv(gym.Env):
         """
         super(UAVFireEnv, self).__init__()
 
-        self.fire_points  = np.asarray(fire_points, dtype=np.float32)
+        self._all_fire_points = np.asarray(fire_points, dtype=np.float32)
+        self.fire_points  = self._all_fire_points.copy()
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
         self.algorithm_name = str(algorithm_name).upper()
         self.env_name = str(env_name) if env_name else self.__class__.__name__
+        if num_agents is None:
+            num_agents = 3 if self.env_name.lower() == 'circle1' else 1
+        self.num_agents = int(num_agents)
+        self.agent_index = (None if agent_index is None else int(agent_index))
+        if self.agent_index is None and self.env_name.lower() == 'circle1' and self.num_agents == 3:
+            auto_key = (self.algorithm_name, self.env_name.lower(), float(self.radius))
+            auto_idx = self._SECTOR_AUTO_COUNTERS.get(auto_key, 0)
+            self.agent_index = int(auto_idx % 3)
+            self._SECTOR_AUTO_COUNTERS[auto_key] = auto_idx + 1
         self.n_fire       = len(self.fire_points)
+        self.target_fires = self.fire_points.copy()
+        self.assigned_sector = None
         self._validate_coordinate_scale()
 
         self.radar_range_m = float(radar_range_m) if radar_range_m is not None else float(self.RADAR_RANGE_M)
@@ -194,10 +208,40 @@ class UAVFireEnv(gym.Env):
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _sector_labels(points, n_sectors=3):
+        if len(points) == 0:
+            return np.zeros((0,), dtype=np.int32)
+        angles = np.arctan2(points[:, 1], points[:, 0])
+        angles = (angles + 2.0 * np.pi) % (2.0 * np.pi)
+        sector_span = 2.0 * np.pi / float(n_sectors)
+        labels = np.floor(angles / sector_span).astype(np.int32)
+        return np.clip(labels, 0, n_sectors - 1)
+
+    def _apply_circle1_sector_assignment(self):
+        self.fire_points = self._all_fire_points.copy()
+        self.target_fires = self.fire_points.copy()
+        self.assigned_sector = None
+        if self.env_name.lower() != 'circle1' or self.num_agents != 3 or len(self._all_fire_points) == 0:
+            self.n_fire = len(self.fire_points)
+            return
+        labels = self._sector_labels(self._all_fire_points, n_sectors=3)
+        sector_idx = 0 if self.agent_index is None else int(self.agent_index) % 3
+        sector_points = self._all_fire_points[labels == sector_idx]
+        if len(sector_points) == 0:
+            counts = [int(np.sum(labels == i)) for i in range(3)]
+            sector_idx = int(np.argmax(counts))
+            sector_points = self._all_fire_points[labels == sector_idx]
+        self.assigned_sector = int(sector_idx)
+        self.fire_points = np.asarray(sector_points, dtype=np.float32)
+        self.target_fires = self.fire_points.copy()
+        self.n_fire = len(self.fire_points)
+
     def reset(self, seed=None, options=None):
         if seed is not None:
             np.random.seed(seed)
 
+        self._apply_circle1_sector_assignment()
         # ── Strict unified start: all UAVs launch from the same center point ──
         self.pos = np.zeros(2, dtype=np.float32)
 
@@ -303,6 +347,8 @@ class UAVFireEnv(gym.Env):
             'bird_collision': bool(bird_hit),
             'mountain_collision': bool(mountain_hit),
             'off_path': bool(off_path),
+            'assigned_sector': self.assigned_sector,
+            'num_agents': int(self.num_agents),
         }
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
