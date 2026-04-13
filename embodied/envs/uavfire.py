@@ -93,6 +93,7 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
+    # Circle8 and circle1_single are intentionally single-policy/single-action tasks.
     strict_num_uavs = 1 if task in ('circle8', 'circle1_single') else 3
     requested_num_uavs = int(num_uavs)
     if requested_num_uavs not in (-1, strict_num_uavs):
