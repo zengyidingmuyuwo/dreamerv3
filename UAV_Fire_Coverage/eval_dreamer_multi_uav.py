@@ -207,7 +207,7 @@ def main():
     parser.add_argument("--num_nearest", default=6, type=int)
     parser.add_argument("--configs", default="defaults,uavfire", type=str,
                         help="Comma-separated dreamerv3 config names.")
-    parser.add_argument("--task_name", default="uavfire_circle8", type=str,
+    parser.add_argument("--task_name", default="uavfire_circle1", type=str,
                         help="Agent task tag used to build Dreamer config.")
     parser.add_argument("--save_path", default=os.path.join(script_dir, "trajectory_results", "eval_dreamer_multi_uav_circle1.png"), type=str)
     args = parser.parse_args()
@@ -215,6 +215,11 @@ def main():
     kwargs = {} if args.circle_id == -1 else {"circle_id": int(args.circle_id)}
     lat_c, lon_c, radius, fire_points = load_circle_data(args.center_csv, args.points_file, **kwargs)
     clusters = cluster_fire_points(fire_points, n_clusters=args.num_clusters)
+    if len(clusters) != args.num_clusters:
+        print(
+            f"[Eval][Warn] Requested {args.num_clusters} clusters but got {len(clusters)} "
+            f"(empty clusters were removed)."
+        )
     print(f"[Eval] Circle1 center=({lat_c:.6f},{lon_c:.6f}) radius={radius:.1f}m")
     print("[Eval] Cluster sizes:", ", ".join(f"UAV{i+1}={len(c)}" for i, c in enumerate(clusters)))
 
