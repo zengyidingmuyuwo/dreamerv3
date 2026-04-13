@@ -109,7 +109,7 @@ class UAVFireEnv(gym.Env):
     def __init__(
         self, fire_points, radius, num_nearest=6, return_dict_obs=False,
         algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3,
-        num_agents=None, agent_index=None
+        num_agents=None, agent_index=None, enforce_circle1_sector_assignment=False
     ):
         """
         Parameters
@@ -135,7 +135,13 @@ class UAVFireEnv(gym.Env):
             num_agents = 3 if self.env_name.lower() == 'circle1' else 1
         self.num_agents = int(num_agents)
         self.agent_index = (None if agent_index is None else int(agent_index))
-        if self.agent_index is None and self.env_name.lower() == 'circle1' and self.num_agents == 3:
+        self.enforce_circle1_sector_assignment = bool(enforce_circle1_sector_assignment)
+        if (
+            self.enforce_circle1_sector_assignment and
+            self.agent_index is None and
+            self.env_name.lower() == 'circle1' and
+            self.num_agents == 3
+        ):
             auto_key = (self.algorithm_name, self.env_name.lower(), float(self.radius))
             auto_idx = self._SECTOR_AUTO_COUNTERS.get(auto_key, 0)
             self.agent_index = int(auto_idx % 3)
@@ -222,7 +228,7 @@ class UAVFireEnv(gym.Env):
         self.fire_points = self._all_fire_points.copy()
         self.target_fires = self.fire_points.copy()
         self.assigned_sector = None
-        if self.env_name.lower() != 'circle1' or self.num_agents != 3 or len(self._all_fire_points) == 0:
+        if (not self.enforce_circle1_sector_assignment) or self.env_name.lower() != 'circle1' or self.num_agents != 3 or len(self._all_fire_points) == 0:
             self.n_fire = len(self.fire_points)
             return
         labels = self._sector_labels(self._all_fire_points, n_sectors=3)
