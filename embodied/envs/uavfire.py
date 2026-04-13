@@ -101,7 +101,7 @@ class UAVFire(embodied.Env):
     UAVFireEnv, UAVFireObstacleEnv = _load_env_classes()
     clusters = self._cluster_fire_points(fire_points, self._num_uavs)
     self._envs = []
-    for cluster in clusters:
+    for idx, cluster in enumerate(clusters):
       if task == 'circle8':
         env = UAVFireObstacleEnv(
             fire_points=cluster, radius=radius, obstacle_map=obstacle_map,
@@ -110,8 +110,9 @@ class UAVFire(embodied.Env):
             elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
       else:
         env = UAVFireEnv(
-            fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
-            algorithm_name='DREAMER', env_name='Circle1')
+            fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
+            algorithm_name='DREAMER', env_name='Circle1',
+            num_agents=self._num_uavs, agent_index=idx, enforce_circle1_sector_assignment=True)
       self._envs.append(env)
     self._num_uavs = len(self._envs)
     self._cluster_count = self._num_uavs
@@ -203,7 +204,10 @@ class UAVFire(embodied.Env):
       reward = float(np.sum(rewards))
       self._last_infos = infos
       self._info = self._merge_infos(infos)
-      done = bool(np.all(dones))
+      coverage_done = bool(self._info.get('coverage_rate', 0.0) >= 1.0 - 1e-6)
+      collision_done = bool(self._info.get('collision', False))
+      timeout_done = bool(np.all(dones))
+      done = bool(coverage_done or collision_done or timeout_done)
     self._episode_reward += float(reward)
     self._episode_steps += 1
     self._total_steps += 1

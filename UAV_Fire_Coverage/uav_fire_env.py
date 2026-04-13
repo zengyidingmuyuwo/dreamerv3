@@ -126,6 +126,10 @@ class UAVFireEnv(gym.Env):
 
         self._all_fire_points = np.asarray(fire_points, dtype=np.float32)
         self.fire_points  = self._all_fire_points.copy()
+        self._obs_fire_points = self._all_fire_points.copy()
+        self._obs_owned_mask = np.ones(len(self._all_fire_points), dtype=bool)
+        self._owned_global_indices = np.arange(len(self._all_fire_points), dtype=np.int32)
+        self._global_to_local_idx = np.arange(len(self._all_fire_points), dtype=np.int32)
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
@@ -226,6 +230,10 @@ class UAVFireEnv(gym.Env):
 
     def _apply_circle1_sector_assignment(self):
         self.fire_points = self._all_fire_points.copy()
+        self._obs_fire_points = self._all_fire_points.copy()
+        self._obs_owned_mask = np.ones(len(self._all_fire_points), dtype=bool)
+        self._owned_global_indices = np.arange(len(self._all_fire_points), dtype=np.int32)
+        self._global_to_local_idx = np.arange(len(self._all_fire_points), dtype=np.int32)
         self.target_fires = self.fire_points.copy()
         self.assigned_sector = None
         if (not self.enforce_circle1_sector_assignment) or self.env_name.lower() != 'circle1' or self.num_agents != 3 or len(self._all_fire_points) == 0:
@@ -239,6 +247,13 @@ class UAVFireEnv(gym.Env):
             sector_idx = int(np.argmax(counts))
             sector_points = self._all_fire_points[labels == sector_idx]
         self.assigned_sector = int(sector_idx)
+        owned_mask = (labels == sector_idx)
+        self._obs_owned_mask = owned_mask.astype(bool)
+        self._owned_global_indices = np.where(self._obs_owned_mask)[0].astype(np.int32)
+        g2l = -np.ones(len(self._all_fire_points), dtype=np.int32)
+        if len(self._owned_global_indices):
+            g2l[self._owned_global_indices] = np.arange(len(self._owned_global_indices), dtype=np.int32)
+        self._global_to_local_idx = g2l
         self.fire_points = np.asarray(sector_points, dtype=np.float32)
         self.target_fires = self.fire_points.copy()
         self.n_fire = len(self.fire_points)
@@ -693,27 +708,23 @@ class UAVFireEnv(gym.Env):
     def _nearest_fire_features(self):
         """Return (dist, sin_angle, cos_angle) for the K nearest unvisited pts."""
         feat = np.zeros(self.num_nearest * 3, dtype=np.float32)
-        unvisited_idx = np.where(~self.visited)[0]
-        if len(unvisited_idx) == 0:
+        if len(self._obs_fire_points) == 0:
             return feat
-
-        pts   = self.fire_points[unvisited_idx]
-        diffs = pts - self.pos
-        dists = np.linalg.norm(diffs, axis=1)
-        visible = dists <= self.radar_range_m
-        if not np.any(visible):
+        all_diffs = self._obs_fire_points - self.pos
+        all_dists = np.linalg.norm(all_diffs, axis=1)
+        visible_global = np.where(all_dists <= self.radar_range_m)[0]
+        if len(visible_global) == 0:
             return feat
-        pts = pts[visible]
-        diffs = diffs[visible]
-        dists = dists[visible]
-
-        k     = min(self.num_nearest, len(dists))
-        order = np.argsort(dists)[:k]
-
-        for i, j in enumerate(order):
-            d     = float(np.clip(dists[j] / self.radar_range_m, 0.0, 1.0))
-            angle = float(np.arctan2(diffs[j, 1], diffs[j, 0]))
-            feat[i * 3]     = d
+        local_order = visible_global[np.argsort(all_dists[visible_global])[:self.num_nearest]]
+        for i, gidx in enumerate(local_order):
+            if not self._obs_owned_mask[gidx]:
+                continue
+            lidx = self._global_to_local_idx[gidx]
+            if lidx < 0 or lidx >= len(self.visited) or self.visited[lidx]:
+                continue
+            d = float(np.clip(all_dists[gidx] / self.radar_range_m, 0.0, 1.0))
+            angle = float(np.arctan2(all_diffs[gidx, 1], all_diffs[gidx, 0]))
+            feat[i * 3] = d
             feat[i * 3 + 1] = np.sin(angle)
             feat[i * 3 + 2] = np.cos(angle)
 
