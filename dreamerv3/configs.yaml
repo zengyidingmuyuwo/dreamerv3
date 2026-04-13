@@ -200,6 +200,10 @@ uavfire:
   task: uavfire_circle1
   run: {steps: 1.1e6, envs: 1, train_ratio: 64}
 
+uavfire_single:
+  task: uavfire_circle1_single
+  run: {steps: 1.1e6, envs: 1, train_ratio: 64}
+
 multicpu:
   batch_size: 12
   jax.mock_devices: 8

@@ -37,7 +37,7 @@ class UAVFire(embodied.Env):
       num_uavs=-1,
       seed=None,
   ):
-    assert task in ('circle1', 'circle8'), task
+    assert task in ('circle1', 'circle1_single', 'circle8'), task
     self._task = task
     self._done = True
     self._info = {}
@@ -93,7 +93,7 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    strict_num_uavs = 1 if task == 'circle8' else 3
+    strict_num_uavs = 1 if task in ('circle8', 'circle1_single') else 3
     requested_num_uavs = int(num_uavs)
     if requested_num_uavs not in (-1, strict_num_uavs):
       print(
@@ -102,7 +102,8 @@ class UAVFire(embodied.Env):
       )
     self._num_uavs = strict_num_uavs
     UAVFireEnv, UAVFireObstacleEnv = _load_env_classes()
-    clusters = self._cluster_fire_points(fire_points, self._num_uavs)
+    cluster_count = 3 if task == 'circle1_single' else self._num_uavs
+    clusters = self._cluster_fire_points(fire_points, cluster_count)
     self._envs = []
     for idx, cluster in enumerate(clusters):
       if task == 'circle8':
@@ -111,11 +112,15 @@ class UAVFire(embodied.Env):
             resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
             elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
-      else:
+      elif task == 'circle1':
         env = UAVFireEnv(
             fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle1',
             num_agents=self._num_uavs, agent_index=idx, enforce_circle1_sector_assignment=True)
+      else:
+        env = UAVFireEnv(
+            fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
+            algorithm_name='DREAMER', env_name='Circle1')
       self._envs.append(env)
     self._num_uavs = len(self._envs)
     self._cluster_count = self._num_uavs
@@ -125,8 +130,8 @@ class UAVFire(embodied.Env):
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._control_mode = 'centralized'
-    self.num_agents = self._num_uavs
+    self._control_mode = 'single' if task == 'circle1_single' else 'centralized'
+    self.num_agents = 1 if self._control_mode == 'single' else self._num_uavs
     self._last_infos = [{} for _ in range(self.num_agents)]
     if self._control_mode == 'single':
       print(
