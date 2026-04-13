@@ -5,6 +5,9 @@ import elements
 import embodied
 
 
+_COVERAGE_COMPLETION_EPS = 1e-6
+
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 UAV_DIR = os.path.join(ROOT, 'UAV_Fire_Coverage')
 if UAV_DIR not in sys.path:
@@ -204,7 +207,7 @@ class UAVFire(embodied.Env):
       reward = float(np.sum(rewards))
       self._last_infos = infos
       self._info = self._merge_infos(infos)
-      coverage_done = bool(self._info.get('coverage_rate', 0.0) >= 1.0 - 1e-6)
+      coverage_done = bool(self._info.get('coverage_rate', 0.0) >= 1.0 - _COVERAGE_COMPLETION_EPS)
       collision_done = bool(self._info.get('collision', False))
       timeout_done = bool(np.all(dones))
       done = bool(coverage_done or collision_done or timeout_done)

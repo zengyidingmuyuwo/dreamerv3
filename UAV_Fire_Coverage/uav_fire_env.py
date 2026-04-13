@@ -716,17 +716,22 @@ class UAVFireEnv(gym.Env):
         if len(visible_global) == 0:
             return feat
         local_order = visible_global[np.argsort(all_dists[visible_global])[:self.num_nearest]]
-        for i, gidx in enumerate(local_order):
+        write_slot = 0
+        for gidx in local_order:
             if not self._obs_owned_mask[gidx]:
                 continue
             lidx = self._global_to_local_idx[gidx]
             if lidx < 0 or lidx >= len(self.visited) or self.visited[lidx]:
                 continue
+            if write_slot >= self.num_nearest:
+                break
             d = float(np.clip(all_dists[gidx] / self.radar_range_m, 0.0, 1.0))
             angle = float(np.arctan2(all_diffs[gidx, 1], all_diffs[gidx, 0]))
-            feat[i * 3] = d
-            feat[i * 3 + 1] = np.sin(angle)
-            feat[i * 3 + 2] = np.cos(angle)
+            base = write_slot * 3
+            feat[base] = d
+            feat[base + 1] = np.sin(angle)
+            feat[base + 2] = np.cos(angle)
+            write_slot += 1
 
         return feat
 
