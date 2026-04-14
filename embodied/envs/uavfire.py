@@ -94,8 +94,9 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    # Circle8 and circle1_single are intentionally single-policy/single-action tasks.
-    strict_num_uavs = 1 if task in ('circle8', 'circle1_single') else 3
+    # Circle1 follows the same clustered non-cooperative setting as PPO/SAC.
+    # Circle8 remains single-UAV.
+    strict_num_uavs = 1 if task == 'circle8' else 3
     requested_num_uavs = int(num_uavs)
     if requested_num_uavs not in (-1, strict_num_uavs):
       print(
@@ -104,7 +105,7 @@ class UAVFire(embodied.Env):
       )
     self._num_uavs = strict_num_uavs
     UAVFireEnv, UAVFireObstacleEnv = _load_env_classes()
-    cluster_count = 3 if task == 'circle1_single' else self._num_uavs
+    cluster_count = 3 if task in ('circle1', 'circle1_single') else self._num_uavs
     clusters = self._cluster_fire_points(fire_points, cluster_count)
     self._envs = []
     for idx, cluster in enumerate(clusters):
@@ -114,11 +115,6 @@ class UAVFire(embodied.Env):
             resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
             elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
-      elif task == 'circle1':
-        env = UAVFireEnv(
-            fire_points=fire_points, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
-            algorithm_name='DREAMER', env_name='Circle1',
-            num_agents=self._num_uavs, agent_index=idx, enforce_circle1_sector_assignment=True)
       else:
         env = UAVFireEnv(
             fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
@@ -133,13 +129,14 @@ class UAVFire(embodied.Env):
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._control_mode = 'single' if task == 'circle1_single' else 'centralized'
+    self._control_mode = 'single' if task in ('circle1', 'circle1_single') else 'centralized'
     self.num_agents = 1 if self._control_mode == 'single' else self._num_uavs
     self._last_infos = [{} for _ in range(self.num_agents)]
     if self._control_mode == 'single':
+      cycle_desc = 'round-robin' if self._single_round_robin else 'fixed-cluster'
       print(
           f'[Dreamer UAVFire] Non-cooperative clustered control enabled: '
-          f'{self._cluster_count} single-UAV clusters (round-robin), '
+          f'{self._cluster_count} single-UAV clusters ({cycle_desc}), '
           f'action_dim={self._single_action_dim}'
       )
     else:
