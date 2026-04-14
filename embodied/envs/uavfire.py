@@ -35,6 +35,7 @@ class UAVFire(embodied.Env):
       num_nearest=6,
       resolution_m=50.0,
       num_uavs=-1,
+      single_round_robin=True,
       seed=None,
   ):
     assert task in ('circle1', 'circle1_single', 'circle8'), task
@@ -126,6 +127,7 @@ class UAVFire(embodied.Env):
     self._num_uavs = len(self._envs)
     self._cluster_count = self._num_uavs
     self._active_env_idx = -1
+    self._single_round_robin = bool(single_round_robin)
     self._active_env = self._envs[0]
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
@@ -269,7 +271,10 @@ class UAVFire(embodied.Env):
   def _reset_single(self):
     if not self._envs:
       raise RuntimeError('No UAV environments available to reset.')
-    self._active_env_idx = (self._active_env_idx + 1) % self._cluster_count
+    if self._single_round_robin:
+      self._active_env_idx = (self._active_env_idx + 1) % self._cluster_count
+    else:
+      self._active_env_idx = 0
     self._active_env = self._envs[self._active_env_idx]
     out = self._active_env.reset()
     obs = out[0] if isinstance(out, tuple) else out
