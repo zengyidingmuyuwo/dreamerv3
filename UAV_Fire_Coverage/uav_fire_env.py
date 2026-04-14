@@ -81,11 +81,9 @@ class UAVFireEnv(gym.Env):
     REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
                                 # the circle which is sufficient boundary enforcement
-    REWARD_APPROACH   = 0.1     # potential-based shaping coefficient: reward
-                                # proportional to reduction in distance to the
-                                # nearest unvisited fire point (normalised by
-                                # STEP_SIZE so one straight-line approach step
-                                # yields exactly REWARD_APPROACH)
+    DIST_REWARD_SCALE = 0.01    # potential-based dense shaping scale:
+                                # dist_reward = (last_min_dist - current_min_dist)
+                                #               * DIST_REWARD_SCALE
     REWARD_WAYPOINT_POTENTIAL = 0.2
     REWARD_WAYPOINT_REACHED  = 10.0
     PENALTY_OFF_PATH         = 0.0
@@ -201,6 +199,7 @@ class UAVFireEnv(gym.Env):
         self._bird_trails = [[] for _ in range(self.num_birds)]
         self._circle8_obstacle_mask = None
         self._circle8_obstacle_mask_loaded = False
+        self._last_min_dist = 0.0
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -278,7 +277,7 @@ class UAVFireEnv(gym.Env):
         self._wind_history = []
         self._wind_state = np.zeros(2, dtype=np.float32)
         self._init_birds()
-        self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
+        self._last_min_dist = self._min_dist_to_nearest()  # for dense shaping
         self._plan_waypoints()
         obs = self._get_obs()
         if _GYM_TUPLE_5:
@@ -311,10 +310,9 @@ class UAVFireEnv(gym.Env):
 
         # ── Reward bookkeeping ───────────────────────────────────────────────
         reward  = self.REWARD_STEP
-        n_before = int(np.sum(self.visited))
         reward  += self._check_visits()
         self._register_visit_for_snapshot()
-        reward  += self._shaping_reward(n_before)
+        reward  += self._shaping_reward()
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         bird_hit = self._bird_collision()
@@ -553,22 +551,12 @@ class UAVFireEnv(gym.Env):
             return 0.0
         return float(np.min(np.linalg.norm(self.fire_points[unvisited] - self.pos, axis=1)))
 
-    def _shaping_reward(self, n_visited_before):
-        """Potential-based shaping: reward for reducing distance to nearest fire point.
-
-        Skips the step immediately after a visit (the "nearest fire point" jumps
-        to a farther one, which is expected and should not be penalised).
-        Updates ``self._prev_min_dist`` for the next step.
-        """
-        n_now   = int(np.sum(self.visited))
-        new_min = self._min_dist_to_nearest()
-        if n_now == n_visited_before:
-            # No visit this step: apply approach shaping
-            shaping = self.REWARD_APPROACH * (self._prev_min_dist - new_min) / self.STEP_SIZE
-        else:
-            shaping = 0.0  # reset baseline without penalising the jump
-        self._prev_min_dist = new_min
-        return float(shaping)
+    def _shaping_reward(self):
+        """Potential-based dense shaping from nearest unvisited fire distance."""
+        current_min_dist = self._min_dist_to_nearest()
+        dist_reward = (self._last_min_dist - current_min_dist) * self.DIST_REWARD_SCALE
+        self._last_min_dist = current_min_dist
+        return float(dist_reward)
 
     # ─────────────────────────────────────────────────────────────────────────
 
