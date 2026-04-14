@@ -30,7 +30,9 @@ Relative position of current and lookahead waypoint:
 
 Action space
 ------------
-Scalar continuous: Δθ ∈ [-1, 1]  (scaled by MAX_TURN_RATE inside step())
+Scalar continuous in [-1, 1]:
+- turn-rate command: action × MAX_TURN_RATE
+- speed command magnitude: |action| × MAX_SPEED
 """
 
 import os
@@ -67,6 +69,7 @@ class UAVFireEnv(gym.Env):
 
     # ── UAV physics ──────────────────────────────────────────────────────────
     UAV_SPEED    = 20.0    # m/s  (typical small fixed-wing)
+    MAX_SPEED    = UAV_SPEED
     MAX_TURN_RATE = 0.25   # rad/step  → min-turn-radius ≈ 80 m at 20 m/s
     DT           = 1.0     # s per step
     STEP_SIZE    = UAV_SPEED * DT  # metres per step
@@ -76,12 +79,12 @@ class UAVFireEnv(gym.Env):
     MAX_STEPS     = 5000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
-    REWARD_STEP       = -1.0    # per-step energy/time penalty to discourage orbiting
-    REWARD_VISIT      = 100.0   # per fire point visited
-    REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
+    REWARD_STEP       = -0.01   # small per-step time/energy penalty
+    REWARD_VISIT      = 50.0    # per fire point visited
+    REWARD_COMPLETE   = 100.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
                                 # the circle which is sufficient boundary enforcement
-    DIST_REWARD_SCALE = 0.01    # potential-based dense shaping scale:
+    DIST_REWARD_SCALE = 0.001   # potential-based dense shaping scale:
                                 # dist_reward = (last_min_dist - current_min_dist)
                                 #               * DIST_REWARD_SCALE
     REWARD_WAYPOINT_POTENTIAL = 0.2
@@ -293,10 +296,12 @@ class UAVFireEnv(gym.Env):
             return self._get_obs(), 0.0, True, {}
 
         # ── Update heading and position ──────────────────────────────────────
-        delta = float(np.asarray(action).flat[0])
-        delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
+        action_cmd = float(np.asarray(action).flat[0])
+        action_cmd = np.clip(action_cmd, -1.0, 1.0)
+        delta = action_cmd * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        control_displacement = self.STEP_SIZE * np.array(
+        speed_cmd = np.abs(action_cmd) * self.MAX_SPEED
+        control_displacement = (speed_cmd * self.DT) * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
         wind_velocity = self._compute_wind_velocity()
@@ -713,7 +718,7 @@ class UAVFireEnv(gym.Env):
                 continue
             if write_slot >= self.num_nearest:
                 break
-            d = float(np.clip(all_dists[gidx] / self.radar_range_m, 0.0, 1.0))
+            d = float(np.clip(all_dists[gidx] / max(self.radius, 1.0), 0.0, 1.0))
             angle = float(np.arctan2(all_diffs[gidx, 1], all_diffs[gidx, 0]))
             base = write_slot * 3
             feat[base] = d
@@ -772,7 +777,7 @@ class UAVFireEnv(gym.Env):
         order = visible[np.argsort(dists[visible])[:self.MAX_TRACKED_BIRDS]]
         vmax = max(self.BIRD_SPEED_M_S, 1.0)
         for i, idx in enumerate(order):
-            dx, dy = diffs[idx] / self.radar_range_m
+            dx, dy = diffs[idx] / max(self.radius, 1.0)
             vx, vy = self._birds_vel[idx] / vmax
             feat[i * 4: i * 4 + 4] = np.clip([dx, dy, vx, vy], -1.0, 1.0)
         return feat
