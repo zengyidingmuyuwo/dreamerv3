@@ -99,10 +99,10 @@ class UAVFireEnv(gym.Env):
     WAYPOINT_TIMEOUT_NEAR_M  = 200.0
     WAYPOINT_TIMEOUT_STEPS   = 300
     WAYPOINT_DIVERGE_EPS     = 1e-6
-    WAYPOINT_COOLDOWN_STEPS  = 40
-    WAYPOINT_COOLDOWN_RADIUS_M = 250.0
-    WAYPOINT_COOLDOWN_PENALTY_BASE = -0.2
-    WAYPOINT_COOLDOWN_PENALTY_GROWTH = -0.05
+    WAYPOINT_COOLDOWN_STEPS  = 40  # penalty window after a waypoint is reached
+    WAYPOINT_COOLDOWN_RADIUS_M = 250.0  # staying near reached waypoint counts as loitering
+    WAYPOINT_COOLDOWN_PENALTY_BASE = -0.2  # first-step loiter penalty in cooldown window
+    WAYPOINT_COOLDOWN_PENALTY_GROWTH = -0.05  # additional penalty per consecutive loiter step
     GLOBAL_CONTEXT_NEAREST   = 5
     HARD_BOUNDARY_FACTOR     = 3.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
