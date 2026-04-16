@@ -88,11 +88,11 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   if args.from_checkpoint:
     elements.checkpoint.load(args.from_checkpoint, dict(
         agent=bind(agent.load, regex=args.from_checkpoint_regex)))
-  ckpt_mode = getattr(args, 'on_ckpt_error', 'raise')
+  checkpoint_error_mode = getattr(args, 'on_ckpt_error', 'raise')
   try:
     cp.load_or_save()
   except Exception as err:
-    if ckpt_mode != 'reset':
+    if checkpoint_error_mode != 'reset':
       raise
     ckpt_dir = str(logdir / 'ckpt')
     backup_dir = str(logdir / f"ckpt_incompatible_{elements.timestamp()}")
