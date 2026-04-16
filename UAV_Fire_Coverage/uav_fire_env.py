@@ -11,7 +11,7 @@ Fixed-wing UAV model
 - Heading updated by action: Δθ = action × MAX_TURN_RATE  (rad/step)
 - Position updated by: Δpos = STEP_SIZE × [cos θ, sin θ]
 
-State vector (23-dimensional by default with num_nearest=6)
+State vector (45-dimensional by default with num_nearest=6)
 -----------------------------------------------------------
  [0]  pos_x        normalised by region radius, range ~[-1, 1]
  [1]  pos_y        normalised by region radius, range ~[-1, 1]
@@ -22,6 +22,9 @@ State vector (23-dimensional by default with num_nearest=6)
             dist_k  (normalised, [0, 1])
             sin(angle_k)
             cos(angle_k)
+ [..] global macro context for nearest unvisited fire points:
+            for each of the m globally nearest unvisited points:
+            rel_dx, rel_dy  (normalised by region radius, clipped to [-1, 1])
 
 Guidance vector (4-dimensional)
 -------------------------------
@@ -89,13 +92,18 @@ class UAVFireEnv(gym.Env):
                                 #               * DIST_REWARD_SCALE
     CENTROID_DIST_REWARD_SCALE = 0.00005  # weaker potential shaping on progress toward unvisited centroid
     REWARD_WAYPOINT_POTENTIAL = 0.05
-    REWARD_WAYPOINT_REACHED  = 80.0
+    REWARD_WAYPOINT_REACHED  = 100.0
     PENALTY_OFF_PATH         = 0.0
     OFF_PATH_DIST_M          = 600.0
     WAYPOINT_REACH_M         = 80.0
     WAYPOINT_TIMEOUT_NEAR_M  = 200.0
     WAYPOINT_TIMEOUT_STEPS   = 300
     WAYPOINT_DIVERGE_EPS     = 1e-6
+    WAYPOINT_COOLDOWN_STEPS  = 40
+    WAYPOINT_COOLDOWN_RADIUS_M = 250.0
+    WAYPOINT_COOLDOWN_PENALTY_BASE = -0.2
+    WAYPOINT_COOLDOWN_PENALTY_GROWTH = -0.05
+    GLOBAL_CONTEXT_NEAREST   = 5
     HARD_BOUNDARY_FACTOR     = 3.0
     MAX_ALLOWED_RADIUS_M     = 2_000_000.0
     WIND_BASE_M_S            = 4.0
@@ -163,8 +171,15 @@ class UAVFireEnv(gym.Env):
         self.radar_range_m = float(radar_range_m) if radar_range_m is not None else float(self.RADAR_RANGE_M)
         self.num_birds = int(max(0, num_birds))
 
-        # State dimension: 5 base + 3 per nearest fire point + 4 per tracked bird
-        self.state_dim = 5 + self.num_nearest * 3 + self.MAX_TRACKED_BIRDS * 4
+        # State dimension: 5 base + 3 per nearest fire point
+        #                + 2 per global nearest unvisited fire point
+        #                + 4 per tracked bird
+        self.state_dim = (
+            5 +
+            self.num_nearest * 3 +
+            self.GLOBAL_CONTEXT_NEAREST * 2 +
+            self.MAX_TRACKED_BIRDS * 4
+        )
         self.vector_dim = 4
 
         self.action_space = spaces.Box(
@@ -213,6 +228,9 @@ class UAVFireEnv(gym.Env):
         self._circle8_obstacle_mask_loaded = False
         self._last_min_dist = 0.0
         self._last_centroid_dist = 0.0
+        self._waypoint_cooldown_remaining = 0
+        self._waypoint_loiter_streak = 0
+        self._last_reached_waypoint = None
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -292,6 +310,9 @@ class UAVFireEnv(gym.Env):
         self._init_birds()
         self._last_min_dist = self._min_dist_to_nearest()  # for dense shaping
         self._last_centroid_dist = self._dist_to_unvisited_centroid()
+        self._waypoint_cooldown_remaining = 0
+        self._waypoint_loiter_streak = 0
+        self._last_reached_waypoint = None
         self._plan_waypoints()
         obs = self._get_obs()
         if _GYM_TUPLE_5:
@@ -332,6 +353,7 @@ class UAVFireEnv(gym.Env):
         reward  += self._centroid_shaping_reward()
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
+        reward  += self._waypoint_cooldown_penalty()
         bird_hit = self._bird_collision()
         mountain_hit = self._is_circle8_mountain_collision()
         if bird_hit:
@@ -617,6 +639,7 @@ class UAVFireEnv(gym.Env):
         remaining_ratio = float(np.sum(~self.visited)) / self.n_fire
 
         nearest_feat = self._nearest_fire_features()
+        macro_fire_feat = self._global_fire_macro_features()
         bird_feat = self._nearest_bird_features()
 
         obs = np.concatenate([
@@ -624,6 +647,7 @@ class UAVFireEnv(gym.Env):
             heading_feat,
             [remaining_ratio],
             nearest_feat,
+            macro_fire_feat,
             bird_feat,
         ]).astype(np.float32)
         vec = self._waypoint_vector()
@@ -719,13 +743,14 @@ class UAVFireEnv(gym.Env):
         old_dist = float(self._prev_wp_dist)
         cur = self._dist_to_waypoint()
         self.steps_since_last_waypoint += 1
-        shaped = float(self.REWARD_WAYPOINT_POTENTIAL * (old_dist - cur))
+        shaped = self._gated_potential_reward(old_dist - cur, self.REWARD_WAYPOINT_POTENTIAL)
         near_and_diverging = (
             (cur <= self.WAYPOINT_TIMEOUT_NEAR_M) and (cur > old_dist + self.WAYPOINT_DIVERGE_EPS)
         )
         timed_out = self.steps_since_last_waypoint > self.WAYPOINT_TIMEOUT_STEPS
         while (cur <= self.WAYPOINT_REACH_M) or near_and_diverging or timed_out:
             shaped += self.REWARD_WAYPOINT_REACHED
+            self._start_waypoint_cooldown(self.current_waypoint)
             moved = self._advance_waypoint()
             self.steps_since_last_waypoint = 0
             if not moved:
@@ -739,6 +764,27 @@ class UAVFireEnv(gym.Env):
             shaped += self.PENALTY_OFF_PATH
         self._prev_wp_dist = cur
         return shaped
+
+    def _start_waypoint_cooldown(self, reached_waypoint):
+        if reached_waypoint is None:
+            return
+        self._last_reached_waypoint = np.asarray(reached_waypoint, dtype=np.float32).copy()
+        self._waypoint_cooldown_remaining = int(self.WAYPOINT_COOLDOWN_STEPS)
+        self._waypoint_loiter_streak = 0
+
+    def _waypoint_cooldown_penalty(self):
+        if self._waypoint_cooldown_remaining <= 0 or self._last_reached_waypoint is None:
+            return 0.0
+        self._waypoint_cooldown_remaining -= 1
+        dist = float(np.linalg.norm(self.pos - self._last_reached_waypoint))
+        if dist <= self.WAYPOINT_COOLDOWN_RADIUS_M:
+            self._waypoint_loiter_streak += 1
+            return float(
+                self.WAYPOINT_COOLDOWN_PENALTY_BASE +
+                self.WAYPOINT_COOLDOWN_PENALTY_GROWTH * float(self._waypoint_loiter_streak - 1)
+            )
+        self._waypoint_loiter_streak = 0
+        return 0.0
 
     def _is_off_path(self):
         return self.current_waypoint is not None and self._dist_to_waypoint() > self.OFF_PATH_DIST_M
@@ -771,6 +817,26 @@ class UAVFireEnv(gym.Env):
             feat[base + 2] = np.cos(angle)
             write_slot += 1
 
+        return feat
+
+    def _global_fire_macro_features(self):
+        """Return relative coordinates for globally nearest unvisited fire points."""
+        feat = np.zeros(self.GLOBAL_CONTEXT_NEAREST * 2, dtype=np.float32)
+        if len(self.fire_points) == 0 or len(self.visited) == 0:
+            return feat
+        unvisited = np.where(~self.visited)[0]
+        if len(unvisited) == 0:
+            return feat
+        diffs = self.fire_points[unvisited] - self.pos[None, :]
+        dists = np.linalg.norm(diffs, axis=1)
+        order = np.argsort(dists)[:self.GLOBAL_CONTEXT_NEAREST]
+        write_slot = 0
+        denom = max(self.radius, 1.0)
+        for idx in order:
+            rel = np.clip(diffs[idx] / denom, -1.0, 1.0)
+            base = write_slot * 2
+            feat[base:base + 2] = rel.astype(np.float32)
+            write_slot += 1
         return feat
 
     def _init_birds(self):
