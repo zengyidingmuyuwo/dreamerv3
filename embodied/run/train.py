@@ -1,4 +1,5 @@
 import collections
+import os
 from functools import partial as bind
 
 import elements
@@ -87,7 +88,24 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   if args.from_checkpoint:
     elements.checkpoint.load(args.from_checkpoint, dict(
         agent=bind(agent.load, regex=args.from_checkpoint_regex)))
-  cp.load_or_save()
+  ckpt_mode = getattr(args, 'on_ckpt_error', 'raise')
+  try:
+    cp.load_or_save()
+  except Exception as err:
+    if ckpt_mode != 'reset':
+      raise
+    ckpt_dir = str(logdir / 'ckpt')
+    backup_dir = str(logdir / f"ckpt_incompatible_{elements.timestamp()}")
+    print(f"[Checkpoint] Incompatible checkpoint detected: {err}")
+    if os.path.exists(ckpt_dir):
+      os.rename(ckpt_dir, backup_dir)
+      print(f"[Checkpoint] Archived incompatible checkpoint to: {backup_dir}")
+    cp = elements.Checkpoint(logdir / 'ckpt')
+    cp.step = step
+    cp.agent = agent
+    cp.replay = replay
+    cp.save()
+    print('[Checkpoint] Started fresh training state from scratch.')
 
   print('Start training loop')
   policy = lambda *args: agent.policy(*args, mode='train')
