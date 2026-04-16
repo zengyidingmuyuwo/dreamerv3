@@ -92,7 +92,9 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   try:
     cp.load_or_save()
   except Exception as err:
-    if checkpoint_error_mode != 'reset':
+    err_text = str(err)
+    is_incompatible_ckpt = ("Error loading 'agent' from checkpoint." in err_text)
+    if checkpoint_error_mode != 'reset' or not is_incompatible_ckpt:
       raise
     ckpt_dir = str(logdir / 'ckpt')
     backup_dir = str(logdir / f"ckpt_incompatible_{elements.timestamp()}")
