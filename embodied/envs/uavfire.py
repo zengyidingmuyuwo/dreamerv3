@@ -94,8 +94,7 @@ class UAVFire(embodied.Env):
       else:
         (_, _, radius), fire_points = generate_sample_circle1_data()
         obstacle_map = None
-    # Circle1 follows the same clustered non-cooperative setting as PPO/SAC.
-    # Circle8 remains single-UAV.
+    # Circle1 defaults to 3 UAVs; Circle8 remains single-UAV.
     strict_num_uavs = 1 if task == 'circle8' else 3
     requested_num_uavs = int(num_uavs)
     if requested_num_uavs not in (-1, strict_num_uavs):
@@ -129,7 +128,18 @@ class UAVFire(embodied.Env):
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._control_mode = 'single' if task in ('circle1', 'circle1_single') else 'centralized'
+    self._control_mode = 'single' if task == 'circle1_single' else 'centralized'
+    self._global_radius = float(radius)
+    self._global_fire_capacity = int(np.asarray(fire_points).shape[0])
+    self._global_bird_capacity = int(
+        sum(int(getattr(env, 'num_birds', 0)) for env in self._envs))
+    self._use_joint_global_features = (
+        self._control_mode == 'centralized' and self._num_uavs > 1)
+    self._global_feature_dim = (
+        (2 * self._num_uavs) +
+        (3 * self._global_fire_capacity) +
+        (3 * self._global_bird_capacity)
+    ) if self._use_joint_global_features else 0
     self.num_agents = 1 if self._control_mode == 'single' else self._num_uavs
     self._last_infos = [{} for _ in range(self.num_agents)]
     if self._control_mode == 'single':
@@ -156,7 +166,7 @@ class UAVFire(embodied.Env):
       vector_shape = (self._single_vector_dim,)
     else:
       image_shape = (self._single_image_dim * self._num_uavs,)
-      vector_shape = (self._single_vector_dim * self._num_uavs,)
+      vector_shape = (self._single_vector_dim * self._num_uavs + self._global_feature_dim,)
     return {
         'image': elements.Space(np.float32, image_shape, -1.0, 1.0),
         'vector': elements.Space(np.float32, vector_shape, -1.0, 1.0),
@@ -238,6 +248,8 @@ class UAVFire(embodied.Env):
           [np.asarray(item['image'], dtype=np.float32) for item in obs], axis=0)
       vector = np.concatenate(
           [np.asarray(item['vector'], dtype=np.float32) for item in obs], axis=0)
+      if self._use_joint_global_features:
+        vector = np.concatenate([vector, self._build_joint_global_features()], axis=0)
     else:
       image = np.asarray(obs['image'], dtype=np.float32)
       vector = np.asarray(obs['vector'], dtype=np.float32)
@@ -251,6 +263,54 @@ class UAVFire(embodied.Env):
         'is_last': is_last,
         'is_terminal': is_terminal,
     }
+
+  def _build_joint_global_features(self):
+    if not self._use_joint_global_features:
+      return np.zeros((0,), dtype=np.float32)
+    radius = max(float(self._global_radius), 1.0)
+    # 1) all UAV positions
+    uav_positions = []
+    for env in self._envs:
+      pos = np.asarray(getattr(env, 'pos', np.zeros(2, dtype=np.float32)), dtype=np.float32)
+      uav_positions.append(np.clip(pos / radius, -1.0, 1.0))
+    uav_positions = np.concatenate(uav_positions, axis=0) if uav_positions else np.zeros((0,), np.float32)
+    # 2) all remaining fire points (padded) + validity mask
+    fire_xy = np.zeros((self._global_fire_capacity, 2), dtype=np.float32)
+    fire_mask = np.zeros((self._global_fire_capacity,), dtype=np.float32)
+    cursor = 0
+    for env in self._envs:
+      pts = np.asarray(getattr(env, 'fire_points', np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
+      vis = np.asarray(getattr(env, 'visited', np.zeros((len(pts),), dtype=bool)), dtype=bool)
+      remain = pts[~vis] if len(pts) else np.zeros((0, 2), dtype=np.float32)
+      for point in remain:
+        if cursor >= self._global_fire_capacity:
+          break
+        fire_xy[cursor] = np.clip(point / radius, -1.0, 1.0)
+        fire_mask[cursor] = 1.0
+        cursor += 1
+      if cursor >= self._global_fire_capacity:
+        break
+    # 3) all dynamic bird positions (padded) + validity mask
+    bird_xy = np.zeros((self._global_bird_capacity, 2), dtype=np.float32)
+    bird_mask = np.zeros((self._global_bird_capacity,), dtype=np.float32)
+    bcursor = 0
+    for env in self._envs:
+      birds = np.asarray(getattr(env, '_birds_pos', np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
+      for bird in birds:
+        if bcursor >= self._global_bird_capacity:
+          break
+        bird_xy[bcursor] = np.clip(bird / radius, -1.0, 1.0)
+        bird_mask[bcursor] = 1.0
+        bcursor += 1
+      if bcursor >= self._global_bird_capacity:
+        break
+    return np.concatenate([
+        uav_positions.astype(np.float32),
+        fire_xy.reshape(-1).astype(np.float32),
+        fire_mask.astype(np.float32),
+        bird_xy.reshape(-1).astype(np.float32),
+        bird_mask.astype(np.float32),
+    ], axis=0)
 
   def _reset_all(self):
     obs_list = []
