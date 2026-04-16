@@ -325,8 +325,12 @@ class UAVFire(embodied.Env):
     n_clusters = int(num_uavs)
     try:
       from sklearn.cluster import KMeans
-      km = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto')
-      labels = km.fit_predict(points)
+      try:
+        km = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto')
+        labels = km.fit_predict(points)
+      except (TypeError, ValueError):
+        km = KMeans(n_clusters=n_clusters, random_state=0, n_init=10)
+        labels = km.fit_predict(points)
     except ImportError:
       labels = np.arange(len(points)) % n_clusters
     clusters = [points[labels == idx] for idx in range(n_clusters)]
