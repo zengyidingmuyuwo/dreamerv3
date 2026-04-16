@@ -87,7 +87,7 @@ class UAVFireEnv(gym.Env):
     DIST_REWARD_SCALE = 0.001   # potential-based dense shaping scale:
                                 # dist_reward = (last_min_dist - current_min_dist)
                                 #               * DIST_REWARD_SCALE
-    CENTROID_DIST_REWARD_SCALE = 0.001
+    CENTROID_DIST_REWARD_SCALE = 0.001  # potential shaping on progress toward unvisited-fire centroid
     REWARD_WAYPOINT_POTENTIAL = 0.2
     REWARD_WAYPOINT_REACHED  = 10.0
     PENALTY_OFF_PATH         = 0.0
