@@ -328,7 +328,9 @@ class UAVFire(embodied.Env):
       try:
         km = KMeans(n_clusters=n_clusters, random_state=0, n_init='auto')
         labels = km.fit_predict(points)
-      except (TypeError, ValueError):
+      except (TypeError, ValueError) as exc:
+        if 'n_init' not in str(exc):
+          raise
         km = KMeans(n_clusters=n_clusters, random_state=0, n_init=10)
         labels = km.fit_predict(points)
     except ImportError:
