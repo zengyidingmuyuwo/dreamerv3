@@ -572,14 +572,17 @@ class UAVFireEnv(gym.Env):
         """Potential-based dense shaping from nearest unvisited fire distance."""
         current_min_dist = self._min_dist_to_nearest()
         progress = self._last_min_dist - current_min_dist
-        if progress > 0:
-            dist_reward = progress * self.DIST_REWARD_SCALE
-        elif progress < 0:
-            dist_reward = progress * (self.DIST_REWARD_SCALE * 0.5)
-        else:
-            dist_reward = 0.0
+        dist_reward = self._gated_potential_reward(progress, self.DIST_REWARD_SCALE)
         self._last_min_dist = current_min_dist
         return float(dist_reward)
+
+    @staticmethod
+    def _gated_potential_reward(progress, scale):
+        if progress > 0:
+            return float(progress * scale)
+        if progress < 0:
+            return float(progress * (scale * 0.5))
+        return 0.0
 
     def _unvisited_centroid(self):
         if self.n_fire == 0:
@@ -598,12 +601,7 @@ class UAVFireEnv(gym.Env):
     def _centroid_shaping_reward(self):
         current_centroid_dist = self._dist_to_unvisited_centroid()
         progress = self._last_centroid_dist - current_centroid_dist
-        if progress > 0:
-            reward = progress * self.CENTROID_DIST_REWARD_SCALE
-        elif progress < 0:
-            reward = progress * (self.CENTROID_DIST_REWARD_SCALE * 0.5)
-        else:
-            reward = 0.0
+        reward = self._gated_potential_reward(progress, self.CENTROID_DIST_REWARD_SCALE)
         self._last_centroid_dist = current_centroid_dist
         return float(reward)
 
