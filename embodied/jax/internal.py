@@ -105,9 +105,8 @@ def setup(
       xlaflags = [x for x in xlaflags if not x.startswith(
           '--xla_gpu_enable_command_buffer=')]
     if xlaflags:
-      os.environ['XLA_FLAGS'] = (
-          f'{existing} {" ".join(xlaflags)}'.strip() if existing
-          else ' '.join(xlaflags))
+      os.environ['XLA_FLAGS'] = ' '.join(
+          filter(None, [existing, ' '.join(xlaflags)])).strip()
 
   if num_processes > 1 and platform != 'tpu':
     # Note that the process_id is unrelated to the jax.process_index() that JAX
