@@ -200,6 +200,7 @@ uavfire:
   <<: *size25m
   task: uavfire_circle1
   batch_length: 256
+  jax.xla_gpu_enable_command_buffer: False
   agent.imag_length: 50
   agent.horizon: 500
   run: {steps: 1.1e6, envs: 1, train_ratio: 64}
@@ -208,6 +209,7 @@ uavfire_single:
   <<: *size25m
   task: uavfire_circle1_single
   batch_length: 256
+  jax.xla_gpu_enable_command_buffer: False
   agent.imag_length: 50
   agent.horizon: 500
   env.uavfire.single_round_robin: True
