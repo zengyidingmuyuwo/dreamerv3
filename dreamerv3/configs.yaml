@@ -77,7 +77,7 @@ defaults:
     train_devices: [0]
     mock_devices: 0
     prealloc: True
-    xla_gpu_enable_command_buffer: null
+    xla_gpu_enable_command_buffer: False
     jit: True
     debug: False
     expect_devices: 0
