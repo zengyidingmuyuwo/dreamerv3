@@ -56,6 +56,8 @@ class UAVFire(embodied.Env):
         bool(effective_center_csv) and bool(effective_points_file) and
         os.path.exists(effective_center_csv) and os.path.exists(effective_points_file)
     )
+    radius = 1.0
+    fire_points = np.zeros((0, 2), dtype=np.float32)
     lat_c = None
     lon_c = None
     dem_query_metadata = None
@@ -267,7 +269,7 @@ class UAVFire(embodied.Env):
   def _build_joint_global_features(self):
     if not self._use_joint_global_features:
       return np.zeros((0,), dtype=np.float32)
-    radius = max(float(self._global_radius), 1.0)
+    radius = max(self._global_radius, 1.0)
     # 1) all UAV positions
     uav_positions = []
     for env in self._envs:
