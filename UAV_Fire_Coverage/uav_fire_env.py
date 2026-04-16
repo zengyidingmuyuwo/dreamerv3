@@ -87,6 +87,7 @@ class UAVFireEnv(gym.Env):
     DIST_REWARD_SCALE = 0.001   # potential-based dense shaping scale:
                                 # dist_reward = (last_min_dist - current_min_dist)
                                 #               * DIST_REWARD_SCALE
+    CENTROID_DIST_REWARD_SCALE = 0.001
     REWARD_WAYPOINT_POTENTIAL = 0.2
     REWARD_WAYPOINT_REACHED  = 10.0
     PENALTY_OFF_PATH         = 0.0
@@ -110,7 +111,8 @@ class UAVFireEnv(gym.Env):
     def __init__(
         self, fire_points, radius, num_nearest=6, return_dict_obs=False,
         algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3,
-        num_agents=None, agent_index=None, enforce_circle1_sector_assignment=False
+        num_agents=None, agent_index=None, enforce_circle1_sector_assignment=False,
+        dict_image_obs=True, max_steps=None,
     ):
         """
         Parameters
@@ -134,6 +136,8 @@ class UAVFireEnv(gym.Env):
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
+        self.dict_image_obs = bool(dict_image_obs)
+        self.max_steps = int(max_steps) if max_steps is not None else int(self.MAX_STEPS)
         self.algorithm_name = str(algorithm_name).upper()
         self.env_name = str(env_name) if env_name else self.__class__.__name__
         if num_agents is None:
@@ -166,10 +170,15 @@ class UAVFireEnv(gym.Env):
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(1,), dtype=np.float32
         )
-        if self.return_dict_obs:
+        if self.return_dict_obs and self.dict_image_obs:
             self.observation_space = spaces.Dict({
                 'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
                 'vector': spaces.Box(low=-1.0, high=1.0, shape=(self.vector_dim,), dtype=np.float32),
+            })
+        elif self.return_dict_obs:
+            self.observation_space = spaces.Dict({
+                'vector': spaces.Box(
+                    low=-1.0, high=1.0, shape=(self.state_dim + self.vector_dim,), dtype=np.float32),
             })
         else:
             self.observation_space = spaces.Box(
@@ -203,6 +212,7 @@ class UAVFireEnv(gym.Env):
         self._circle8_obstacle_mask = None
         self._circle8_obstacle_mask_loaded = False
         self._last_min_dist = 0.0
+        self._last_centroid_dist = 0.0
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -281,6 +291,7 @@ class UAVFireEnv(gym.Env):
         self._wind_state = np.zeros(2, dtype=np.float32)
         self._init_birds()
         self._last_min_dist = self._min_dist_to_nearest()  # for dense shaping
+        self._last_centroid_dist = self._dist_to_unvisited_centroid()
         self._plan_waypoints()
         obs = self._get_obs()
         if _GYM_TUPLE_5:
@@ -318,6 +329,7 @@ class UAVFireEnv(gym.Env):
         reward  += self._check_visits()
         self._register_visit_for_snapshot()
         reward  += self._shaping_reward()
+        reward  += self._centroid_shaping_reward()
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         bird_hit = self._bird_collision()
@@ -331,7 +343,7 @@ class UAVFireEnv(gym.Env):
         off_path = self._is_off_path()
 
         # ── Termination ──────────────────────────────────────────────────────
-        done = self._done or outside_hard_boundary or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or outside_hard_boundary or bool(np.all(self.visited)) or (self.step_count >= self.max_steps)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
         self._current_ep_score += float(reward)
@@ -563,6 +575,26 @@ class UAVFireEnv(gym.Env):
         self._last_min_dist = current_min_dist
         return float(dist_reward)
 
+    def _unvisited_centroid(self):
+        if self.n_fire == 0:
+            return None
+        unvisited = self.fire_points[~self.visited]
+        if len(unvisited) == 0:
+            return None
+        return np.mean(unvisited, axis=0).astype(np.float32)
+
+    def _dist_to_unvisited_centroid(self):
+        centroid = self._unvisited_centroid()
+        if centroid is None:
+            return 0.0
+        return float(np.linalg.norm(self.pos - centroid))
+
+    def _centroid_shaping_reward(self):
+        current_centroid_dist = self._dist_to_unvisited_centroid()
+        reward = (self._last_centroid_dist - current_centroid_dist) * self.CENTROID_DIST_REWARD_SCALE
+        self._last_centroid_dist = current_centroid_dist
+        return float(reward)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def _get_obs(self):
@@ -585,16 +617,19 @@ class UAVFireEnv(gym.Env):
             bird_feat,
         ]).astype(np.float32)
         vec = self._waypoint_vector()
+        merged = np.concatenate([obs, vec]).astype(np.float32)
         if self.return_dict_obs:
-            return self._clip_observation({'image': obs, 'vector': vec})
-        return self._clip_observation(np.concatenate([obs, vec]).astype(np.float32))
+            if self.dict_image_obs:
+                return self._clip_observation({'image': obs, 'vector': vec})
+            return self._clip_observation({'vector': merged})
+        return self._clip_observation(merged)
 
     def _clip_observation(self, obs):
         if isinstance(obs, dict):
-            return {
-                'image': np.clip(obs['image'], -1.0, 1.0).astype(np.float32),
-                'vector': np.clip(obs['vector'], -1.0, 1.0).astype(np.float32),
-            }
+            out = {'vector': np.clip(obs['vector'], -1.0, 1.0).astype(np.float32)}
+            if 'image' in obs:
+                out['image'] = np.clip(obs['image'], -1.0, 1.0).astype(np.float32)
+            return out
         return np.clip(obs, -1.0, 1.0).astype(np.float32)
 
     def _compute_wind_velocity(self):

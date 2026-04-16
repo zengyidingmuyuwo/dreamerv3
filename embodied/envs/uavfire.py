@@ -115,11 +115,13 @@ class UAVFire(embodied.Env):
             fire_points=cluster, radius=radius, obstacle_map=obstacle_map,
             resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
-            elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata)
+            elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata,
+            dict_image_obs=False, max_steps=1000)
       else:
         env = UAVFireEnv(
             fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
-            algorithm_name='DREAMER', env_name='Circle1')
+            algorithm_name='DREAMER', env_name='Circle1',
+            dict_image_obs=False, max_steps=1000)
       self._envs.append(env)
     self._num_uavs = len(self._envs)
     self._cluster_count = self._num_uavs
@@ -128,7 +130,6 @@ class UAVFire(embodied.Env):
     self._active_env = self._envs[0]
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
-    self._single_image_dim = int(self._env.observation_space['image'].shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
     self._control_mode = 'single' if task == 'circle1_single' else 'centralized'
     self._global_radius = float(radius)
@@ -164,13 +165,10 @@ class UAVFire(embodied.Env):
   @property
   def obs_space(self):
     if self._control_mode == 'single':
-      image_shape = (self._single_image_dim,)
       vector_shape = (self._single_vector_dim,)
     else:
-      image_shape = (self._single_image_dim * self._num_uavs,)
       vector_shape = (self._single_vector_dim * self._num_uavs + self._global_feature_dim,)
     return {
-        'image': elements.Space(np.float32, image_shape, -1.0, 1.0),
         'vector': elements.Space(np.float32, vector_shape, -1.0, 1.0),
         'reward': elements.Space(np.float32),
         'is_first': elements.Space(bool),
@@ -246,19 +244,14 @@ class UAVFire(embodied.Env):
 
   def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
     if isinstance(obs, list):
-      image = np.concatenate(
-          [np.asarray(item['image'], dtype=np.float32) for item in obs], axis=0)
       vector = np.concatenate(
           [np.asarray(item['vector'], dtype=np.float32) for item in obs], axis=0)
       if self._use_joint_global_features:
         vector = np.concatenate([vector, self._build_joint_global_features()], axis=0)
     else:
-      image = np.asarray(obs['image'], dtype=np.float32)
       vector = np.asarray(obs['vector'], dtype=np.float32)
-    image = np.clip(image, -1.0, 1.0).astype(np.float32)
     vector = np.clip(vector, -1.0, 1.0).astype(np.float32)
     return {
-        'image': image,
         'vector': vector,
         'reward': np.float32(reward),
         'is_first': is_first,
