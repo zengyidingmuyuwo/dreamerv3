@@ -79,17 +79,17 @@ class UAVFireEnv(gym.Env):
     MAX_STEPS     = 5000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
-    REWARD_STEP       = -0.01   # small per-step time/energy penalty
-    REWARD_VISIT      = 50.0    # per fire point visited
+    REWARD_STEP       = -0.1    # fixed per-step time penalty to discourage hovering
+    REWARD_VISIT      = 100.0   # dominant sparse reward per newly extinguished fire point
     REWARD_COMPLETE   = 100.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
                                 # the circle which is sufficient boundary enforcement
-    DIST_REWARD_SCALE = 0.001   # potential-based dense shaping scale:
+    DIST_REWARD_SCALE = 0.0002  # weak potential-based dense shaping scale:
                                 # dist_reward = (last_min_dist - current_min_dist)
                                 #               * DIST_REWARD_SCALE
-    CENTROID_DIST_REWARD_SCALE = 0.001  # potential shaping on progress toward unvisited-fire centroid
-    REWARD_WAYPOINT_POTENTIAL = 0.2
-    REWARD_WAYPOINT_REACHED  = 10.0
+    CENTROID_DIST_REWARD_SCALE = 0.00005  # weaker potential shaping on progress toward unvisited centroid
+    REWARD_WAYPOINT_POTENTIAL = 0.05
+    REWARD_WAYPOINT_REACHED  = 80.0
     PENALTY_OFF_PATH         = 0.0
     OFF_PATH_DIST_M          = 600.0
     WAYPOINT_REACH_M         = 80.0
@@ -571,7 +571,13 @@ class UAVFireEnv(gym.Env):
     def _shaping_reward(self):
         """Potential-based dense shaping from nearest unvisited fire distance."""
         current_min_dist = self._min_dist_to_nearest()
-        dist_reward = (self._last_min_dist - current_min_dist) * self.DIST_REWARD_SCALE
+        progress = self._last_min_dist - current_min_dist
+        if progress > 0:
+            dist_reward = progress * self.DIST_REWARD_SCALE
+        elif progress < 0:
+            dist_reward = progress * (self.DIST_REWARD_SCALE * 0.5)
+        else:
+            dist_reward = 0.0
         self._last_min_dist = current_min_dist
         return float(dist_reward)
 
@@ -591,7 +597,13 @@ class UAVFireEnv(gym.Env):
 
     def _centroid_shaping_reward(self):
         current_centroid_dist = self._dist_to_unvisited_centroid()
-        reward = (self._last_centroid_dist - current_centroid_dist) * self.CENTROID_DIST_REWARD_SCALE
+        progress = self._last_centroid_dist - current_centroid_dist
+        if progress > 0:
+            reward = progress * self.CENTROID_DIST_REWARD_SCALE
+        elif progress < 0:
+            reward = progress * (self.CENTROID_DIST_REWARD_SCALE * 0.5)
+        else:
+            reward = 0.0
         self._last_centroid_dist = current_centroid_dist
         return float(reward)
 

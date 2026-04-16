@@ -131,7 +131,11 @@ class UAVFire(embodied.Env):
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    self._control_mode = 'single' if task == 'circle1_single' else 'centralized'
+    # Force joint control for Circle1 Dreamer runs to keep transitions consistent.
+    if task == 'circle1_single':
+      print('[Dreamer UAVFire] Override circle1_single -> centralized joint control.')
+    self._control_mode = 'centralized'
+    self._single_round_robin = False
     self._global_radius = float(radius)
     self._global_fire_capacity = int(np.asarray(fire_points).shape[0])
     self._global_bird_capacity = int(
