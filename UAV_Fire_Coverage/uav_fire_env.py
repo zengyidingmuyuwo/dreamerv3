@@ -350,7 +350,8 @@ class UAVFireEnv(gym.Env):
         reward  += self._check_visits()
         self._register_visit_for_snapshot()
         reward  += self._shaping_reward()
-        reward  += self._centroid_shaping_reward()
+        if not self._is_circle8_env():
+            reward  += self._centroid_shaping_reward()
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         reward  += self._waypoint_cooldown_penalty()
@@ -621,6 +622,9 @@ class UAVFireEnv(gym.Env):
         return float(np.linalg.norm(self.pos - centroid))
 
     def _centroid_shaping_reward(self):
+        if self._is_circle8_env():
+            self._last_centroid_dist = self._dist_to_unvisited_centroid()
+            return 0.0
         current_centroid_dist = self._dist_to_unvisited_centroid()
         progress = self._last_centroid_dist - current_centroid_dist
         reward = self._gated_potential_reward(progress, self.CENTROID_DIST_REWARD_SCALE)

@@ -242,7 +242,8 @@ class UAVFireObstacleEnv(UAVFireEnv):
         reward  += self._check_visits()
         self._register_visit_for_snapshot()
         reward  += self._shaping_reward()
-        reward  += self._centroid_shaping_reward()
+        if not self._is_circle8_env():
+            reward  += self._centroid_shaping_reward()
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         off_path = self._is_off_path()
