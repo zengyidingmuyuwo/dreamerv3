@@ -116,7 +116,7 @@ class UAVFire(embodied.Env):
             resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
             elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata,
-            dict_image_obs=False, max_steps=1000)
+            dict_image_obs=False, max_steps=5000)
       else:
         env = UAVFireEnv(
             fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
