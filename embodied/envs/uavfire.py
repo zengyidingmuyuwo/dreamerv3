@@ -109,7 +109,6 @@ class UAVFire(embodied.Env):
     cluster_count = 3 if task in ('circle1', 'circle1_single') else self._num_uavs
     clusters = self._cluster_fire_points(fire_points, cluster_count)
     self._envs = []
-    env_max_steps = 5000 if task == 'circle8' else 1000
     for idx, cluster in enumerate(clusters):
       if task == 'circle8':
         env = UAVFireObstacleEnv(
@@ -117,12 +116,12 @@ class UAVFire(embodied.Env):
             resolution_m=resolution_m, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle8', lat_center=lat_c, lon_center=lon_c,
             elevation_threshold=elev_threshold, dem_query_metadata=dem_query_metadata,
-            dict_image_obs=False, max_steps=env_max_steps)
+            dict_image_obs=False, max_steps=1000)
       else:
         env = UAVFireEnv(
             fire_points=cluster, radius=radius, num_nearest=num_nearest, return_dict_obs=True,
             algorithm_name='DREAMER', env_name='Circle1',
-            dict_image_obs=False, max_steps=env_max_steps)
+            dict_image_obs=False, max_steps=1000)
       self._envs.append(env)
     self._num_uavs = len(self._envs)
     self._cluster_count = self._num_uavs
@@ -132,15 +131,11 @@ class UAVFire(embodied.Env):
     self._env = self._envs[0]
     self._single_action_dim = int(self._env.action_space.shape[0])
     self._single_vector_dim = int(self._env.observation_space['vector'].shape[0])
-    if task == 'circle8':
-      self._control_mode = 'single'
-      self._single_round_robin = False
-    else:
-      # Force joint control for Circle1 Dreamer runs to keep transitions consistent.
-      if task == 'circle1_single':
-        print('[Dreamer UAVFire] Override circle1_single -> centralized joint control.')
-      self._control_mode = 'centralized'
-      self._single_round_robin = False
+    # Force joint control for all tasks to keep transitions consistent.
+    if task == 'circle1_single':
+      print('[Dreamer UAVFire] Override circle1_single -> centralized joint control.')
+    self._control_mode = 'centralized'
+    self._single_round_robin = False
     self._global_radius = float(radius)
     self._global_fire_capacity = int(np.asarray(fire_points).shape[0])
     self._global_bird_capacity = int(
