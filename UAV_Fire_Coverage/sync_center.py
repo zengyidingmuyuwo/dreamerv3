@@ -2,7 +2,8 @@ import pandas as pd
 import geopandas as gpd
 import os
 
-base_dir = r"E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.join(SCRIPT_DIR, "prepare")
 pairs = [
     ("circle_1_center.csv", "circle_1_points.shp"),
     ("circle_8_center.csv", "circle_8_points.shp")

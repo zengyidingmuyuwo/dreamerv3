@@ -17,8 +17,8 @@ Usage
 
 # Train with your own data files:
     python sac_uav_circle1.py \
-        --center_csv  "E:/lzd/.../circle_1_center.csv" \
-        --points_file "E:/lzd/.../circle_1_points.shp"
+        --center_csv  "/path/to/prepare/circle_1_center.csv" \
+        --points_file "/path/to/prepare/circle_1_points.shp"
 
 # Resume (load saved model):
     python sac_uav_circle1.py --load
@@ -35,8 +35,13 @@ import torch.optim as optim
 from torch.distributions import Normal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from uav_fire_env import UAVFireEnv
 from data_utils import (load_circle_data, generate_sample_circle1_data)
+from comparison_logging import EpisodeCSVLogger
+
+
+def _load_uav_fire_env_class():
+    from uav_fire_env import UAVFireEnv
+    return UAVFireEnv
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -44,7 +49,9 @@ from data_utils import (load_circle_data, generate_sample_circle1_data)
 def env_reset(env):
     result = env.reset()
     if isinstance(result, tuple):
-        return result[0]
+        result = result[0]
+    if isinstance(result, dict):
+        return np.concatenate([result['image'], result['vector']]).astype(np.float32)
     return result
 
 
@@ -52,19 +59,26 @@ def env_step(env, action):
     result = env.step(action)
     if len(result) == 5:
         obs, rew, terminated, truncated, info = result
-        return obs, rew, terminated or truncated, info
-    return result
+        done = terminated or truncated
+    else:
+        obs, rew, done, info = result
+    if isinstance(obs, dict):
+        obs = np.concatenate([obs['image'], obs['vector']]).astype(np.float32)
+    return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PREPARE_DIR = os.path.join(SCRIPT_DIR, 'prepare')
+
 parser = argparse.ArgumentParser(description='SAC — Circle 1 multi-UAV fire coverage')
 parser.add_argument('--center_csv',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_center.csv',
+    default=os.path.join(PREPARE_DIR, 'circle_1_center.csv'),
     type=str, help='Circle-1 centre CSV (columns: circle_id, center_x, center_y, radius_m, diameter_m)')
 parser.add_argument('--circle_id',
     default=None, type=int,
     help='circle_id value to select from the centre CSV (default: first row)')
 parser.add_argument('--points_file',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_points.shp',
+    default=os.path.join(PREPARE_DIR, 'circle_1_points.shp'),
     type=str, help='Circle-1 fire-point SHP or CSV file')
 parser.add_argument('--num_uavs',     default=3,  type=int)
 parser.add_argument('--gamma',        default=0.99, type=float)
@@ -79,6 +93,8 @@ parser.add_argument('--save_interval',default=200,   type=int)
 parser.add_argument('--render',       action='store_true')
 parser.add_argument('--load',         action='store_true')
 parser.add_argument('--save_dir',     default='./sac_circle1_model', type=str)
+parser.add_argument('--log_dir',      default=os.path.join(SCRIPT_DIR, 'logs'), type=str,
+                    help='Directory for unified comparison CSV logs')
 args = parser.parse_args()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -310,7 +326,8 @@ def main():
     print(f'[SAC Circle1] {len(clusters)} clusters:  '
           + '  '.join(f'UAV{i+1}={len(c)}pts' for i, c in enumerate(clusters)))
 
-    envs = [UAVFireEnv(fire_points=c, radius=radius) for c in clusters]
+    UAVFireEnv = _load_uav_fire_env_class()
+    envs = [UAVFireEnv(fire_points=c, radius=radius, algorithm_name='SAC', env_name='Circle1') for c in clusters]
     state_dim  = envs[0].observation_space.shape[0]
     action_dim = envs[0].action_space.shape[0]
     print(f'[SAC Circle1] state_dim={state_dim}  action_dim={action_dim}')
@@ -318,6 +335,8 @@ def main():
     agent = SACAgent(state_dim, action_dim)
     if args.load:
         agent.load(args.save_dir)
+    episode_logger = EpisodeCSVLogger('SAC', 'Circle1', args.log_dir)
+    print(f'[SAC Circle1] Writing training log to: {os.path.abspath(episode_logger.path)}')
 
     running_rewards = [0.0] * len(envs)
     total_steps     = 0
@@ -356,6 +375,13 @@ def main():
                   f'steps={t+1:4d}  ep_r={ep_reward:7.1f}  '
                   f'running_r={running_rewards[env_idx]:7.1f}  '
                   f'coverage={cov:.1f}%  updates={agent.num_updates}')
+        episode_logger.log_episode(
+            episode=episode,
+            timesteps=total_steps,
+            episode_reward=ep_reward,
+            coverage_pct=info.get('coverage_rate', 0.0) * 100.0,
+            collision=bool(info.get('collision', False)),
+        )
 
         if episode % args.save_interval == 0:
             agent.save(args.save_dir)

@@ -16,7 +16,10 @@ to obtain synthetic datasets that match the expected format.
 import os
 import csv
 import math
+import warnings
 import numpy as np
+import zipfile
+import tempfile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Coordinate helpers
@@ -46,6 +49,42 @@ def local_to_latlon(east_m, north_m, lat_center, lon_center):
     lat = lat_center + north_m / R
     lon = lon_center + east_m / (R * math.cos(math.radians(lat_center)))
     return float(lat), float(lon)
+
+
+def infer_utm_epsg(lon_center, lat_center):
+    """Infer UTM EPSG code from WGS84 center coordinates."""
+    zone = int((float(lon_center) + 180.0) // 6.0) + 1
+    zone = min(max(zone, 1), 60)
+    base = 32600 if float(lat_center) >= 0 else 32700
+    return base + zone
+
+
+def local_offsets_from_projected_xy(xy, lat_center, lon_center):
+    """Convert projected absolute XY points to local XY (meters) around center.
+
+    The center is transformed from WGS84 into an inferred local UTM CRS and then
+    subtracted from all projected XY points.
+    """
+    arr = np.asarray(xy, dtype=np.float64)
+    if arr.size == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    try:
+        from pyproj import Transformer
+        epsg = infer_utm_epsg(lon_center, lat_center)
+        to_proj = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+        cx, cy = to_proj.transform(float(lon_center), float(lat_center))
+        return (arr - np.array([cx, cy], dtype=np.float64)[None, :]).astype(np.float32)
+    except Exception:
+        # Last-resort fallback to keep points numerically local if CRS toolchain
+        # is unavailable; center-relative path above remains preferred.
+        warnings.warn(
+            "Falling back to median-centered projected coordinates because center CRS "
+            "transformation failed; local origin may not match circle center exactly. "
+            "Install pyproj for accurate coordinate transformation: pip install pyproj",
+            UserWarning,
+        )
+        centre = np.array([np.nanmedian(arr[:, 0]), np.nanmedian(arr[:, 1])], dtype=np.float64)
+        return (arr - centre[None, :]).astype(np.float32)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -183,6 +222,44 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
     -------
     points : np.ndarray, shape (N, 2), dtype float32
     """
+    # Preferred path: geopandas can read CRS and safely transform to WGS84.
+    try:
+        import geopandas as gpd
+        from pyproj import Transformer
+        gdf = gpd.read_file(filepath)
+        if gdf.empty:
+            return np.zeros((0, 2), dtype=np.float32)
+        gdf = gdf[gdf.geometry.notnull()].copy()
+        if gdf.empty:
+            return np.zeros((0, 2), dtype=np.float32)
+        if gdf.crs is None:
+            # If values look projected (meters), convert center into inferred UTM
+            # and subtract center to build local coordinates.
+            xy = np.array([(geom.x, geom.y) for geom in gdf.geometry], dtype=np.float64)
+            x_abs = np.nanmedian(np.abs(xy[:, 0]))
+            y_abs = np.nanmedian(np.abs(xy[:, 1]))
+            if x_abs > 1e4 or y_abs > 1e4:
+                return local_offsets_from_projected_xy(xy, lat_center, lon_center)
+            # Otherwise assume lon/lat
+            lon = xy[:, 0]
+            lat = xy[:, 1]
+            out = [latlon_to_local(la, lo, lat_center, lon_center) for la, lo in zip(lat, lon)]
+            return np.asarray(out, dtype=np.float32)
+        if gdf.crs.is_geographic:
+            lon = gdf.geometry.x.to_numpy(dtype=np.float64)
+            lat = gdf.geometry.y.to_numpy(dtype=np.float64)
+            out = [latlon_to_local(la, lo, lat_center, lon_center) for la, lo in zip(lat, lon)]
+            return np.asarray(out, dtype=np.float32)
+        # Projected CRS (meter): transform center lon/lat into this CRS and compute local meter offsets.
+        to_proj = Transformer.from_crs("EPSG:4326", gdf.crs, always_xy=True)
+        cx, cy = to_proj.transform(float(lon_center), float(lat_center))
+        x = gdf.geometry.x.to_numpy(dtype=np.float64)
+        y = gdf.geometry.y.to_numpy(dtype=np.float64)
+        pts = np.column_stack([x - cx, y - cy]).astype(np.float32)
+        return pts
+    except Exception:
+        pass
+
     try:
         import shapefile  # pyshp
     except ImportError:
@@ -192,27 +269,95 @@ def load_fire_points_shp(filepath, lat_center, lon_center):
             print(f"[data_utils] pyshp not available; loading {csv_path} instead.")
             return load_fire_points_csv(csv_path, lat_center, lon_center)
         raise ImportError(
-            "pyshp is required to read .shp files. "
-            "Install it with:  pip install pyshp\n"
+            "geopandas/pyproj or pyshp is required to read .shp files. "
+            "Install one of:\n"
+            "  pip install geopandas pyproj\n"
+            "  pip install pyshp\n"
             f"Alternatively, place a CSV at {csv_path}."
         )
 
-    points = []
+    xy = []
     with shapefile.Reader(filepath) as sf:
         for shape in sf.shapes():
-            lon, lat = shape.points[0]  # Point geometry: (x=lon, y=lat)
-            e, n = latlon_to_local(lat, lon, lat_center, lon_center)
-            points.append([e, n])
-    return np.array(points, dtype=np.float32)
+            x, y = shape.points[0]
+            xy.append([x, y])
+    if not xy:
+        return np.zeros((0, 2), dtype=np.float32)
+    xy = np.asarray(xy, dtype=np.float64)
+    x_abs = np.nanmedian(np.abs(xy[:, 0]))
+    y_abs = np.nanmedian(np.abs(xy[:, 1]))
+    if x_abs > 1e4 or y_abs > 1e4:
+        # Projected-meter legacy SHP without CRS metadata.
+        return local_offsets_from_projected_xy(xy, lat_center, lon_center)
+    # Assume lon/lat legacy input.
+    out = [latlon_to_local(y, x, lat_center, lon_center) for x, y in xy]
+    return np.asarray(out, dtype=np.float32)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GeoTIFF elevation loader (optional — requires rasterio)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def resolve_elevation_raster_path(path):
+    """Resolve DEM source path; supports .tif/.tiff and .zip containing tif."""
+    if not path:
+        raise ValueError("Empty elevation path")
+    src = os.path.abspath(path)
+    if not os.path.exists(src):
+        raise FileNotFoundError(f"Elevation source not found: {src}")
+    lower = src.lower()
+    if lower.endswith(('.tif', '.tiff')):
+        return src
+    if not lower.endswith('.zip'):
+        raise ValueError(f"Unsupported elevation file type: {src}")
+    cache_dir = os.path.join(tempfile.gettempdir(), 'dreamerv3_dem_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    with zipfile.ZipFile(src, 'r') as zf:
+        names = [n for n in zf.namelist() if n.lower().endswith(('.tif', '.tiff'))]
+        if not names:
+            raise ValueError(f"No tif/tiff found in zip: {src}")
+        pick = sorted(names)[0]
+        out = os.path.join(cache_dir, os.path.basename(pick))
+        if not os.path.exists(out):
+            zf.extract(pick, cache_dir)
+            extracted = os.path.join(cache_dir, pick)
+            if extracted != out:
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                os.replace(extracted, out)
+    return out
+
+
+def build_dem_query_metadata(tif_filepath):
+    """Load full DEM and transforms for step-time elevation query."""
+    try:
+        import rasterio
+        from pyproj import Transformer
+        from rasterio.transform import rowcol
+    except ImportError:
+        return None
+    raster_path = resolve_elevation_raster_path(tif_filepath)
+    with rasterio.open(raster_path) as src:
+        elevation = src.read(1)
+        transform = src.transform
+        crs = src.crs
+        nodata = src.nodata
+        height, width = src.height, src.width
+    to_raster = Transformer.from_crs("EPSG:4326", crs, always_xy=True) if crs else None
+    return {
+        'elevation': elevation,
+        'transform': transform,
+        'to_raster': to_raster,
+        'width': int(width),
+        'height': int(height),
+        'nodata': nodata,
+        'source_path': raster_path,
+        'rowcol': rowcol,
+    }
+
+
 def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
                                  region_radius_m, elevation_threshold=2000.0,
-                                 target_resolution_m=50.0):
+                                 target_resolution_m=50.0, return_metadata=False):
     """Load a GeoTIFF elevation map and build a binary obstacle grid.
 
     Pixels with elevation ≥ *elevation_threshold* metres are marked as
@@ -249,10 +394,9 @@ def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
             "Install it with:  pip install rasterio"
         )
 
-    if not os.path.exists(tif_filepath):
-        raise FileNotFoundError(f"Elevation TIF not found: {tif_filepath}")
+    raster_path = resolve_elevation_raster_path(tif_filepath)
 
-    with rasterio.open(tif_filepath) as src:
+    with rasterio.open(raster_path) as src:
         # Build a bounding box in geographic coordinates
         delta_lat = region_radius_m / 111_000.0
         delta_lon = region_radius_m / (111_000.0 * math.cos(math.radians(lat_center)))
@@ -276,7 +420,9 @@ def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
         )
 
     obstacle_map = (elevation >= elevation_threshold)
-    return obstacle_map.astype(bool), float(target_resolution_m)
+    if not return_metadata:
+        return obstacle_map.astype(bool), float(target_resolution_m)
+    return obstacle_map.astype(bool), float(target_resolution_m), build_dem_query_metadata(raster_path)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

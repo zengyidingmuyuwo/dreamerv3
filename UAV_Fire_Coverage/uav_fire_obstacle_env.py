@@ -17,7 +17,13 @@ Additional rewards / penalties
   PENALTY_PROXIMITY  — proportional to closeness to nearest obstacle
 """
 
+import os
 import numpy as np
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    matplotlib = None
 try:
     import gymnasium as gym
     from gymnasium import spaces
@@ -28,6 +34,7 @@ except ImportError:
     _GYM_TUPLE_5 = False
 
 from uav_fire_env import UAVFireEnv
+from global_planner import DronePlanner
 
 
 class UAVFireObstacleEnv(UAVFireEnv):
@@ -43,7 +50,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     def __init__(self, fire_points, radius,
                  obstacle_map=None, resolution_m=50.0,
-                 num_nearest=6):
+                 num_nearest=6, return_dict_obs=False, algorithm_name='RL',
+                 env_name=None, lat_center=None, lon_center=None,
+                 elevation_threshold=2000.0, dem_query_metadata=None,
+                 radar_range_m=None, num_birds=3):
         """
         Parameters
         ----------
@@ -60,22 +70,96 @@ class UAVFireObstacleEnv(UAVFireEnv):
             fire_points=fire_points,
             radius=radius,
             num_nearest=num_nearest,
+            return_dict_obs=return_dict_obs,
+            algorithm_name=algorithm_name,
+            env_name=env_name,
+            radar_range_m=radar_range_m,
+            num_birds=num_birds,
         )
 
         self.obstacle_map  = obstacle_map   # (H, W) bool or None
         self.resolution_m  = float(resolution_m)
+        self.lat_center = float(lat_center) if lat_center is not None else None
+        self.lon_center = float(lon_center) if lon_center is not None else None
+        self.elevation_threshold = float(elevation_threshold)
+        self.dem_query_metadata = dem_query_metadata
+        self._mountain_overlay_cache = None
 
         # Extend state dimension with NUM_SENSORS obstacle distances
         extra = self.NUM_SENSORS
         self.state_dim += extra
+        self._planner = DronePlanner(obstacle_map=self.obstacle_map, resolution_m=self.resolution_m)
+        os.makedirs(self.TRAJECTORY_RESULTS_DIR, exist_ok=True)
+        if self.return_dict_obs:
+            self.observation_space = spaces.Dict({
+                'image': spaces.Box(low=-1.0, high=1.0, shape=(self.state_dim,), dtype=np.float32),
+                'vector': spaces.Box(low=-1.0, high=1.0, shape=(self.vector_dim,), dtype=np.float32),
+            })
+        else:
+            self.observation_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(self.state_dim + self.vector_dim,), dtype=np.float32
+            )
 
-        self.observation_space = spaces.Box(
-            low=np.concatenate([
-                np.full(self.state_dim - extra, -1.0),
-                np.zeros(extra),             # sensor distances in [0, 1]
-            ]).astype(np.float32),
-            high=np.ones(self.state_dim, dtype=np.float32),
-        )
+    def _draw_background_layer(self, ax):
+        super()._draw_background_layer(ax)
+
+    def _get_mountain_overlay(self):
+        if self._mountain_overlay_cache is not None:
+            return self._mountain_overlay_cache
+        grid_size = int(max(128, min(600, np.ceil((2.0 * self.radius) / max(self.resolution_m, 1.0)))))
+        xs = np.linspace(-self.radius, self.radius, grid_size, dtype=np.float32)
+        ys = np.linspace(-self.radius, self.radius, grid_size, dtype=np.float32)
+        xx, yy = np.meshgrid(xs, ys)
+        circle_mask = (xx ** 2 + yy ** 2) <= (self.radius ** 2)
+        mountain_mask = np.zeros_like(circle_mask, dtype=bool)
+
+        # Preferred path: project local metric grid to WGS84 and query DEM elevations.
+        meta = self.dem_query_metadata
+        if meta and self.lat_center is not None and self.lon_center is not None:
+            try:
+                R = 111_000.0
+                lat = self.lat_center + (yy / R)
+                lon = self.lon_center + (xx / (R * np.cos(np.radians(self.lat_center))))
+                to_raster = meta.get('to_raster')
+                rowcol = meta.get('rowcol')
+                if to_raster is not None and rowcol is not None:
+                    rx, ry = to_raster.transform(lon, lat)
+                    row, col = rowcol(meta['transform'], rx, ry)
+                    row = np.asarray(row, dtype=np.int64)
+                    col = np.asarray(col, dtype=np.int64)
+                    valid = (
+                        circle_mask &
+                        (row >= 0) & (col >= 0) &
+                        (row < int(meta['height'])) & (col < int(meta['width']))
+                    )
+                    if np.any(valid):
+                        elev = np.full(xx.shape, np.nan, dtype=np.float32)
+                        elev_vals = meta['elevation'][row[valid], col[valid]].astype(np.float32)
+                        nodata = meta.get('nodata')
+                        if nodata is not None:
+                            bad = np.isclose(elev_vals, float(nodata))
+                            elev_vals[bad] = np.nan
+                        elev[valid] = elev_vals
+                        mountain_mask = np.isfinite(elev) & (elev >= self.elevation_threshold) & circle_mask
+            except Exception:
+                mountain_mask = np.zeros_like(circle_mask, dtype=bool)
+
+        # Fallback path: use precomputed local obstacle map if DEM query metadata is unavailable.
+        if not np.any(mountain_mask) and self.obstacle_map is not None:
+            h, w = self.obstacle_map.shape
+            cx, cy = w // 2, h // 2
+            jj = (cx + xx / self.resolution_m).astype(np.int64)
+            ii = (cy - yy / self.resolution_m).astype(np.int64)
+            valid = (
+                circle_mask &
+                (ii >= 0) & (jj >= 0) &
+                (ii < h) & (jj < w)
+            )
+            mountain_mask[valid] = self.obstacle_map[ii[valid], jj[valid]]
+            mountain_mask &= circle_mask
+
+        self._mountain_overlay_cache = (xx, yy, mountain_mask)
+        return self._mountain_overlay_cache
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -86,6 +170,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if self._at_obstacle(self.pos):
             self.pos = np.zeros(2, dtype=np.float32)
             self._prev_min_dist = self._min_dist_to_nearest()
+            self._plan_waypoints()
+            if _GYM_TUPLE_5:
+                return self._get_obs(), {}
+            return self._get_obs()
         return result
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -100,23 +188,39 @@ class UAVFireObstacleEnv(UAVFireEnv):
         delta = float(np.asarray(action).flat[0])
         delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        self.pos = self.pos + self.STEP_SIZE * np.array(
+        control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
+        wind_velocity = self._compute_wind_velocity()
+        wind_displacement = wind_velocity * self.DT
+        self.pos = self.pos + control_displacement + wind_displacement
+        self._update_birds()
         self._trajectory.append(self.pos.copy())
+        self._register_trajectory_for_snapshot()
         self.step_count += 1
 
         # ── Collision check ──────────────────────────────────────────────────
         reward = self.REWARD_STEP
-        if self._at_obstacle(self.pos):
+        elev_m = self._query_elevation_m(self.pos)
+        hit_mountain = (elev_m is not None and elev_m > self.elevation_threshold)
+        hit_obstacle = self._at_obstacle(self.pos)
+        bird_hit = self._bird_collision()
+        if hit_mountain or hit_obstacle or bird_hit:
             reward += self.PENALTY_COLLISION
+            if bird_hit:
+                reward += self.PENALTY_BIRD_COLLISION
             self._done = True
+            self._current_ep_score += float(reward)
+            self._finalize_episode_record(float(np.sum(self.visited)) / self.n_fire)
             info = {
                 'visited_count': int(np.sum(self.visited)),
                 'total_fire_points': self.n_fire,
                 'step': self.step_count,
                 'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
                 'collision': True,
+                'mountain_collision': bool(hit_mountain or hit_obstacle),
+                'bird_collision': bool(bird_hit),
+                'elevation_m': float(elev_m) if elev_m is not None else None,
             }
             if _GYM_TUPLE_5:
                 return self._get_obs(), float(reward), True, False, info
@@ -130,12 +234,18 @@ class UAVFireObstacleEnv(UAVFireEnv):
         # ── Visit, shaping & boundary (same as base) ─────────────────────────
         n_before = int(np.sum(self.visited))
         reward  += self._check_visits()
+        self._register_visit_for_snapshot()
         reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
+        reward  += self._waypoint_reward()
+        off_path = self._is_off_path()
 
-        done = bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
+        done = self._done or bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):
             reward += self.REWARD_COMPLETE
+        self._current_ep_score += float(reward)
+        if done:
+            self._finalize_episode_record(float(np.sum(self.visited)) / self.n_fire)
         self._done = done
 
         info = {
@@ -144,17 +254,87 @@ class UAVFireObstacleEnv(UAVFireEnv):
             'step': self.step_count,
             'coverage_rate': float(np.sum(self.visited)) / self.n_fire,
             'collision': False,
+            'mountain_collision': False,
+            'bird_collision': False,
+            'elevation_m': float(elev_m) if elev_m is not None else None,
+            'off_path': bool(off_path),
         }
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
         return self._get_obs(), float(reward), done, info
+
+    def _finalize_episode_record(self, coverage_rate):
+        self._episode_count += 1
+        if self._episode_count == 1:
+            initial_path = os.path.join(
+                self.TRAJECTORY_RESULTS_DIR,
+                f'initial_{self.algorithm_name}_{self.env_name}.png',
+            )
+            self._save_trajectory_snapshot(
+                save_path=initial_path,
+                coverage_rate=coverage_rate,
+                title_prefix='Initial Episode Trajectory',
+            )
+        if self._current_ep_score > self._best_ep_score:
+            self._best_ep_score = self._current_ep_score
+            best_path = os.path.join(
+                self.TRAJECTORY_RESULTS_DIR,
+                f'best_{self.algorithm_name}_{self.env_name}.png',
+            )
+            self._save_trajectory_snapshot(
+                save_path=best_path,
+                coverage_rate=coverage_rate,
+                title_prefix='Best Episode Trajectory',
+            )
+            print(f'New best trajectory saved with score: {self._current_ep_score:.2f}')
 
     # ─────────────────────────────────────────────────────────────────────────
 
     def _get_obs(self):
         base_obs = super()._get_obs()
         sensors  = self._obstacle_sensors()
-        return np.concatenate([base_obs, sensors]).astype(np.float32)
+        if self.return_dict_obs:
+            img = np.concatenate([base_obs['image'], sensors]).astype(np.float32)
+            return self._clip_observation({'image': img, 'vector': base_obs['vector']})
+        return self._clip_observation(np.concatenate([base_obs, sensors]).astype(np.float32))
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _local_to_latlon(self, pos):
+        if self.lat_center is None or self.lon_center is None:
+            return None
+        east_m, north_m = float(pos[0]), float(pos[1])
+        R = 111_000.0
+        lat = self.lat_center + north_m / R
+        lon = self.lon_center + east_m / (R * np.cos(np.radians(self.lat_center)))
+        return float(lat), float(lon)
+
+    def _query_elevation_m(self, pos):
+        meta = self.dem_query_metadata
+        if not meta:
+            return None
+        ll = self._local_to_latlon(pos)
+        if ll is None:
+            return None
+        lat, lon = ll
+        to_raster = meta.get('to_raster')
+        if to_raster is None:
+            return None
+        try:
+            rx, ry = to_raster.transform(lon, lat)
+            rowcol = meta.get('rowcol')
+            if rowcol is None:
+                return None
+            row, col = rowcol(meta['transform'], rx, ry)
+            if row < 0 or col < 0 or row >= meta['height'] or col >= meta['width']:
+                return None
+            val = float(meta['elevation'][row, col])
+            nodata = meta.get('nodata')
+            if nodata is not None and np.isclose(val, nodata):
+                return None
+            return val
+        except Exception:
+            return None
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -202,59 +382,10 @@ class UAVFireObstacleEnv(UAVFireEnv):
         sensors = self._obstacle_sensors()
         return float(np.min(sensors) * self.MAX_SENSOR_RANGE)
 
+    def _save_trajectory_snapshot(self, save_path, coverage_rate, title_prefix):
+        return super()._save_trajectory_snapshot(save_path, coverage_rate, title_prefix)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def render(self, mode='human'):
-        """Visualise environment including obstacle map."""
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.patches as mpatches
-        except ImportError:
-            return
-
-        if not hasattr(self, '_fig') or self._fig is None:
-            self._fig, self._ax = plt.subplots(figsize=(7, 7))
-            plt.ion()
-
-        ax = self._ax
-        ax.clear()
-
-        # Obstacle map background
-        if self.obstacle_map is not None:
-            H, W = self.obstacle_map.shape
-            ext = [-W // 2 * self.resolution_m, W // 2 * self.resolution_m,
-                   -H // 2 * self.resolution_m, H // 2 * self.resolution_m]
-            ax.imshow(self.obstacle_map, cmap='Reds', alpha=0.35,
-                      extent=ext, origin='upper', zorder=0)
-
-        # Boundary circle
-        ax.add_patch(mpatches.Circle((0, 0), self.radius,
-                                     fill=False, color='steelblue', lw=2))
-
-        # Fire points
-        unv = self.fire_points[~self.visited]
-        vis = self.fire_points[self.visited]
-        if len(unv): ax.scatter(unv[:, 0], unv[:, 1], c='red',      s=40, zorder=3, label='Unvisited')
-        if len(vis): ax.scatter(vis[:, 0], vis[:, 1], c='limegreen', s=40, zorder=3, label='Visited')
-
-        # Trajectory
-        if len(self._trajectory) > 1:
-            traj = np.array(self._trajectory)
-            ax.plot(traj[:, 0], traj[:, 1], 'b-', lw=0.5, alpha=0.5)
-
-        # UAV
-        ax.scatter(*self.pos, c='blue', s=120, marker='^', zorder=5)
-        aln = self.radius * 0.06
-        ax.annotate('', xy=(self.pos[0] + aln * np.cos(self.heading),
-                             self.pos[1] + aln * np.sin(self.heading)),
-                    xytext=self.pos,
-                    arrowprops=dict(arrowstyle='->', color='blue', lw=2))
-
-        lim = self.radius * 1.15
-        ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
-        ax.set_aspect('equal')
-        ax.legend(loc='upper right', fontsize=8)
-        ax.set_title(f'UAV Fire+Obstacle  step={self.step_count}  '
-                     f'visited={np.sum(self.visited)}/{self.n_fire}')
-        self._fig.canvas.draw()
-        plt.pause(0.001)
+        return super().render(mode=mode)

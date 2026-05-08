@@ -10,9 +10,9 @@ Usage
 
 # Train with your own data files:
     python sac_uav_circle8.py \
-        --center_csv  "E:/lzd/.../circle_8_center.csv" \
-        --points_file "E:/lzd/.../circle_8_points.shp" \
-        --elevation_tif "E:/lzd/fire data/.../数据完整的区域高程图.tif"
+        --center_csv  "/path/to/prepare/circle_8_center.csv" \
+        --points_file "/path/to/prepare/circle_8_points.shp" \
+        --elevation_tif "/path/to/prepare/elevation/your_dem.tif"
 
 # Resume (load saved model):
     python sac_uav_circle8.py --load
@@ -29,9 +29,14 @@ import torch.optim as optim
 from torch.distributions import Normal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from uav_fire_obstacle_env import UAVFireObstacleEnv
 from data_utils import (load_circle_data, load_elevation_obstacle_map,
                         generate_sample_circle8_data)
+from comparison_logging import EpisodeCSVLogger
+
+
+def _load_uav_fire_obstacle_env_class():
+    from uav_fire_obstacle_env import UAVFireObstacleEnv
+    return UAVFireObstacleEnv
 
 
 # ── gym / gymnasium compatibility helpers ─────────────────────────────────────
@@ -39,7 +44,9 @@ from data_utils import (load_circle_data, load_elevation_obstacle_map,
 def env_reset(env):
     result = env.reset()
     if isinstance(result, tuple):
-        return result[0]
+        result = result[0]
+    if isinstance(result, dict):
+        return np.concatenate([result['image'], result['vector']]).astype(np.float32)
     return result
 
 
@@ -47,22 +54,29 @@ def env_step(env, action):
     result = env.step(action)
     if len(result) == 5:
         obs, rew, terminated, truncated, info = result
-        return obs, rew, terminated or truncated, info
-    return result
+        done = terminated or truncated
+    else:
+        obs, rew, done, info = result
+    if isinstance(obs, dict):
+        obs = np.concatenate([obs['image'], obs['vector']]).astype(np.float32)
+    return obs, rew, done, info
 
 # ── argument parser ───────────────────────────────────────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PREPARE_DIR = os.path.join(SCRIPT_DIR, 'prepare')
+
 parser = argparse.ArgumentParser(description='SAC — Circle 8 fire coverage + obstacle avoidance')
 parser.add_argument('--center_csv',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_center.csv',
+    default=os.path.join(PREPARE_DIR, 'circle_8_center.csv'),
     type=str, help='Circle-8 centre CSV (columns: circle_id, center_x, center_y, radius_m, diameter_m)')
 parser.add_argument('--circle_id',
     default=None, type=int,
     help='circle_id value to select from the centre CSV (default: first row)')
 parser.add_argument('--points_file',
-    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_points.shp',
+    default=os.path.join(PREPARE_DIR, 'circle_8_points.shp'),
     type=str, help='Circle-8 fire-point SHP or CSV file')
 parser.add_argument('--elevation_tif',
-    default=r'E:\lzd\fire data\各种图\数据完整的区域高程图.tif',
+    default='',
     type=str, help='DEM GeoTIFF; pixels ≥ elev_threshold are obstacles')
 parser.add_argument('--elev_threshold', default=2000.0, type=float)
 parser.add_argument('--gamma',         default=0.99, type=float)
@@ -77,7 +91,17 @@ parser.add_argument('--save_interval', default=200,   type=int)
 parser.add_argument('--render',        action='store_true')
 parser.add_argument('--load',          action='store_true')
 parser.add_argument('--save_dir',      default='./sac_circle8_model', type=str)
+parser.add_argument('--log_dir',       default=os.path.join(SCRIPT_DIR, 'logs'), type=str,
+                    help='Directory for unified comparison CSV logs')
 args = parser.parse_args()
+if not args.elevation_tif:
+    elev_dir = os.path.join(PREPARE_DIR, 'elevation')
+    if os.path.isdir(elev_dir):
+        tif_candidates = sorted(
+            f for f in os.listdir(elev_dir) if f.lower().endswith(('.tif', '.tiff', '.zip'))
+        )
+        if tif_candidates:
+            args.elevation_tif = os.path.join(elev_dir, tif_candidates[0])
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 MIN_LOG_STD = -20
@@ -272,6 +296,7 @@ class SACAgent:
 def main():
     obstacle_map = None
     resolution_m = 50.0
+    dem_query_metadata = None
 
     # ── Data ─────────────────────────────────────────────────────────────────
     if args.center_csv and os.path.exists(args.center_csv) and \
@@ -285,10 +310,11 @@ def main():
         if args.elevation_tif and os.path.exists(args.elevation_tif):
             print(f'[SAC Circle8] Loading elevation map: {args.elevation_tif}')
             try:
-                obstacle_map, resolution_m = load_elevation_obstacle_map(
+                obstacle_map, resolution_m, dem_query_metadata = load_elevation_obstacle_map(
                     args.elevation_tif, lat_c, lon_c,
                     region_radius_m=radius,
                     elevation_threshold=args.elev_threshold,
+                    return_metadata=True,
                 )
                 n_obs = int(np.sum(obstacle_map))
                 print(f'  Obstacle map: {obstacle_map.shape}  '
@@ -304,11 +330,18 @@ def main():
               f'obstacle_pixels={n_obs}')
 
     # ── Environment ───────────────────────────────────────────────────────────
+    UAVFireObstacleEnv = _load_uav_fire_obstacle_env_class()
     env = UAVFireObstacleEnv(
         fire_points=fire_points,
         radius=radius,
         obstacle_map=obstacle_map,
         resolution_m=resolution_m,
+        algorithm_name='SAC',
+        env_name='Circle8',
+        lat_center=lat_c,
+        lon_center=lon_c,
+        elevation_threshold=args.elev_threshold,
+        dem_query_metadata=dem_query_metadata,
     )
     state_dim  = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -318,6 +351,8 @@ def main():
     agent = SACAgent(state_dim, action_dim)
     if args.load:
         agent.load(args.save_dir)
+    episode_logger = EpisodeCSVLogger('SAC', 'Circle8', args.log_dir)
+    print(f'[SAC Circle8] Writing training log to: {os.path.abspath(episode_logger.path)}')
 
     running_reward = 0.0
     total_steps    = 0
@@ -355,6 +390,13 @@ def main():
                   f'ep_r={ep_reward:7.1f}  running_r={running_reward:7.1f}  '
                   f'coverage={cov:.1f}%  collision={collision}  '
                   f'updates={agent.num_updates}')
+        episode_logger.log_episode(
+            episode=episode,
+            timesteps=total_steps,
+            episode_reward=ep_reward,
+            coverage_pct=info.get('coverage_rate', 0.0) * 100.0,
+            collision=bool(info.get('collision', False)),
+        )
 
         if episode % args.save_interval == 0:
             agent.save(args.save_dir)
