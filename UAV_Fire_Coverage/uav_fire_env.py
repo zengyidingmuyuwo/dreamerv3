@@ -30,9 +30,7 @@ Relative position of current and lookahead waypoint:
 
 Action space
 ------------
-Scalar continuous in [-1, 1]:
-- turn-rate command: action × MAX_TURN_RATE
-- speed command magnitude: |action| × MAX_SPEED
+Scalar continuous: Δθ ∈ [-1, 1]  (scaled by MAX_TURN_RATE inside step())
 """
 
 import os
@@ -57,7 +55,6 @@ from global_planner import DronePlanner
 class UAVFireEnv(gym.Env):
     """Single fixed-wing UAV fire-point coverage environment."""
     _TRAJECTORY_REGISTRY = {}
-    _SECTOR_AUTO_COUNTERS = {}
     RADAR_RANGE_M = 3000.0
     MAX_TRACKED_BIRDS = 3
     BIRD_SPEED_M_S = 14.0
@@ -69,7 +66,6 @@ class UAVFireEnv(gym.Env):
 
     # ── UAV physics ──────────────────────────────────────────────────────────
     UAV_SPEED    = 20.0    # m/s  (typical small fixed-wing)
-    MAX_SPEED    = UAV_SPEED
     MAX_TURN_RATE = 0.25   # rad/step  → min-turn-radius ≈ 80 m at 20 m/s
     DT           = 1.0     # s per step
     STEP_SIZE    = UAV_SPEED * DT  # metres per step
@@ -79,14 +75,16 @@ class UAVFireEnv(gym.Env):
     MAX_STEPS     = 5000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
-    REWARD_STEP       = -0.01   # small per-step time/energy penalty
-    REWARD_VISIT      = 50.0    # per fire point visited
-    REWARD_COMPLETE   = 100.0   # bonus for visiting all fire points
+    REWARD_STEP       = -1.0    # per-step energy/time penalty to discourage orbiting
+    REWARD_VISIT      = 100.0   # per fire point visited
+    REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
     PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
                                 # the circle which is sufficient boundary enforcement
-    DIST_REWARD_SCALE = 0.001   # potential-based dense shaping scale:
-                                # dist_reward = (last_min_dist - current_min_dist)
-                                #               * DIST_REWARD_SCALE
+    REWARD_APPROACH   = 0.1     # potential-based shaping coefficient: reward
+                                # proportional to reduction in distance to the
+                                # nearest unvisited fire point (normalised by
+                                # STEP_SIZE so one straight-line approach step
+                                # yields exactly REWARD_APPROACH)
     REWARD_WAYPOINT_POTENTIAL = 0.2
     REWARD_WAYPOINT_REACHED  = 10.0
     PENALTY_OFF_PATH         = 0.0
@@ -109,8 +107,7 @@ class UAVFireEnv(gym.Env):
 
     def __init__(
         self, fire_points, radius, num_nearest=6, return_dict_obs=False,
-        algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3,
-        num_agents=None, agent_index=None, enforce_circle1_sector_assignment=False
+        algorithm_name='RL', env_name=None, radar_range_m=None, num_birds=3
     ):
         """
         Parameters
@@ -125,35 +122,13 @@ class UAVFireEnv(gym.Env):
         """
         super(UAVFireEnv, self).__init__()
 
-        self._all_fire_points = np.asarray(fire_points, dtype=np.float32)
-        self.fire_points  = self._all_fire_points.copy()
-        self._obs_fire_points = self._all_fire_points.copy()
-        self._obs_owned_mask = np.ones(len(self._all_fire_points), dtype=bool)
-        self._owned_global_indices = np.arange(len(self._all_fire_points), dtype=np.int32)
-        self._global_to_local_idx = np.arange(len(self._all_fire_points), dtype=np.int32)
+        self.fire_points  = np.asarray(fire_points, dtype=np.float32)
         self.radius       = float(radius)
         self.num_nearest  = int(num_nearest)
         self.return_dict_obs = bool(return_dict_obs)
         self.algorithm_name = str(algorithm_name).upper()
         self.env_name = str(env_name) if env_name else self.__class__.__name__
-        if num_agents is None:
-            num_agents = 3 if self.env_name.lower() == 'circle1' else 1
-        self.num_agents = int(num_agents)
-        self.agent_index = (None if agent_index is None else int(agent_index))
-        self.enforce_circle1_sector_assignment = bool(enforce_circle1_sector_assignment)
-        if (
-            self.enforce_circle1_sector_assignment and
-            self.agent_index is None and
-            self.env_name.lower() == 'circle1' and
-            self.num_agents == 3
-        ):
-            auto_key = (self.algorithm_name, self.env_name.lower(), float(self.radius))
-            auto_idx = self._SECTOR_AUTO_COUNTERS.get(auto_key, 0)
-            self.agent_index = int(auto_idx % 3)
-            self._SECTOR_AUTO_COUNTERS[auto_key] = auto_idx + 1
         self.n_fire       = len(self.fire_points)
-        self.target_fires = self.fire_points.copy()
-        self.assigned_sector = None
         self._validate_coordinate_scale()
 
         self.radar_range_m = float(radar_range_m) if radar_range_m is not None else float(self.RADAR_RANGE_M)
@@ -202,7 +177,6 @@ class UAVFireEnv(gym.Env):
         self._bird_trails = [[] for _ in range(self.num_birds)]
         self._circle8_obstacle_mask = None
         self._circle8_obstacle_mask_loaded = False
-        self._last_min_dist = 0.0
 
     def _validate_coordinate_scale(self):
         if self.n_fire == 0:
@@ -220,51 +194,10 @@ class UAVFireEnv(gym.Env):
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _sector_labels(points, n_sectors=3):
-        if len(points) == 0:
-            return np.zeros((0,), dtype=np.int32)
-        angles = np.arctan2(points[:, 1], points[:, 0])
-        angles = (angles + 2.0 * np.pi) % (2.0 * np.pi)
-        sector_span = 2.0 * np.pi / float(n_sectors)
-        labels = np.floor(angles / sector_span).astype(np.int32)
-        return np.clip(labels, 0, n_sectors - 1)
-
-    def _apply_circle1_sector_assignment(self):
-        self.fire_points = self._all_fire_points.copy()
-        self._obs_fire_points = self._all_fire_points.copy()
-        self._obs_owned_mask = np.ones(len(self._all_fire_points), dtype=bool)
-        self._owned_global_indices = np.arange(len(self._all_fire_points), dtype=np.int32)
-        self._global_to_local_idx = np.arange(len(self._all_fire_points), dtype=np.int32)
-        self.target_fires = self.fire_points.copy()
-        self.assigned_sector = None
-        if (not self.enforce_circle1_sector_assignment) or self.env_name.lower() != 'circle1' or self.num_agents != 3 or len(self._all_fire_points) == 0:
-            self.n_fire = len(self.fire_points)
-            return
-        labels = self._sector_labels(self._all_fire_points, n_sectors=3)
-        sector_idx = 0 if self.agent_index is None else int(self.agent_index) % 3
-        sector_points = self._all_fire_points[labels == sector_idx]
-        if len(sector_points) == 0:
-            counts = [int(np.sum(labels == i)) for i in range(3)]
-            sector_idx = int(np.argmax(counts))
-            sector_points = self._all_fire_points[labels == sector_idx]
-        self.assigned_sector = int(sector_idx)
-        owned_mask = (labels == sector_idx)
-        self._obs_owned_mask = owned_mask.astype(bool)
-        self._owned_global_indices = np.where(self._obs_owned_mask)[0].astype(np.int32)
-        g2l = -np.ones(len(self._all_fire_points), dtype=np.int32)
-        if len(self._owned_global_indices):
-            g2l[self._owned_global_indices] = np.arange(len(self._owned_global_indices), dtype=np.int32)
-        self._global_to_local_idx = g2l
-        self.fire_points = np.asarray(sector_points, dtype=np.float32)
-        self.target_fires = self.fire_points.copy()
-        self.n_fire = len(self.fire_points)
-
     def reset(self, seed=None, options=None):
         if seed is not None:
             np.random.seed(seed)
 
-        self._apply_circle1_sector_assignment()
         # ── Strict unified start: all UAVs launch from the same center point ──
         self.pos = np.zeros(2, dtype=np.float32)
 
@@ -280,7 +213,7 @@ class UAVFireEnv(gym.Env):
         self._wind_history = []
         self._wind_state = np.zeros(2, dtype=np.float32)
         self._init_birds()
-        self._last_min_dist = self._min_dist_to_nearest()  # for dense shaping
+        self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         self._plan_waypoints()
         obs = self._get_obs()
         if _GYM_TUPLE_5:
@@ -296,12 +229,10 @@ class UAVFireEnv(gym.Env):
             return self._get_obs(), 0.0, True, {}
 
         # ── Update heading and position ──────────────────────────────────────
-        action_cmd = float(np.asarray(action).flat[0])
-        action_cmd = np.clip(action_cmd, -1.0, 1.0)
-        delta = action_cmd * self.MAX_TURN_RATE
+        delta = float(np.asarray(action).flat[0])
+        delta = np.clip(delta, -1.0, 1.0) * self.MAX_TURN_RATE
         self.heading = (self.heading + delta) % (2.0 * np.pi)
-        speed_cmd = np.abs(action_cmd) * self.MAX_SPEED
-        control_displacement = (speed_cmd * self.DT) * np.array(
+        control_displacement = self.STEP_SIZE * np.array(
             [np.cos(self.heading), np.sin(self.heading)], dtype=np.float32
         )
         wind_velocity = self._compute_wind_velocity()
@@ -315,9 +246,10 @@ class UAVFireEnv(gym.Env):
 
         # ── Reward bookkeeping ───────────────────────────────────────────────
         reward  = self.REWARD_STEP
+        n_before = int(np.sum(self.visited))
         reward  += self._check_visits()
         self._register_visit_for_snapshot()
-        reward  += self._shaping_reward()
+        reward  += self._shaping_reward(n_before)
         reward  += self._boundary_penalty()
         reward  += self._waypoint_reward()
         bird_hit = self._bird_collision()
@@ -371,8 +303,6 @@ class UAVFireEnv(gym.Env):
             'bird_collision': bool(bird_hit),
             'mountain_collision': bool(mountain_hit),
             'off_path': bool(off_path),
-            'assigned_sector': self.assigned_sector,
-            'num_agents': int(self.num_agents),
         }
         if _GYM_TUPLE_5:
             return self._get_obs(), float(reward), done, False, info
@@ -556,12 +486,22 @@ class UAVFireEnv(gym.Env):
             return 0.0
         return float(np.min(np.linalg.norm(self.fire_points[unvisited] - self.pos, axis=1)))
 
-    def _shaping_reward(self):
-        """Potential-based dense shaping from nearest unvisited fire distance."""
-        current_min_dist = self._min_dist_to_nearest()
-        dist_reward = (self._last_min_dist - current_min_dist) * self.DIST_REWARD_SCALE
-        self._last_min_dist = current_min_dist
-        return float(dist_reward)
+    def _shaping_reward(self, n_visited_before):
+        """Potential-based shaping: reward for reducing distance to nearest fire point.
+
+        Skips the step immediately after a visit (the "nearest fire point" jumps
+        to a farther one, which is expected and should not be penalised).
+        Updates ``self._prev_min_dist`` for the next step.
+        """
+        n_now   = int(np.sum(self.visited))
+        new_min = self._min_dist_to_nearest()
+        if n_now == n_visited_before:
+            # No visit this step: apply approach shaping
+            shaping = self.REWARD_APPROACH * (self._prev_min_dist - new_min) / self.STEP_SIZE
+        else:
+            shaping = 0.0  # reset baseline without penalising the jump
+        self._prev_min_dist = new_min
+        return float(shaping)
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -701,30 +641,29 @@ class UAVFireEnv(gym.Env):
     def _nearest_fire_features(self):
         """Return (dist, sin_angle, cos_angle) for the K nearest unvisited pts."""
         feat = np.zeros(self.num_nearest * 3, dtype=np.float32)
-        if len(self._obs_fire_points) == 0:
+        unvisited_idx = np.where(~self.visited)[0]
+        if len(unvisited_idx) == 0:
             return feat
-        all_diffs = self._obs_fire_points - self.pos
-        all_dists = np.linalg.norm(all_diffs, axis=1)
-        visible_global = np.where(all_dists <= self.radar_range_m)[0]
-        if len(visible_global) == 0:
+
+        pts   = self.fire_points[unvisited_idx]
+        diffs = pts - self.pos
+        dists = np.linalg.norm(diffs, axis=1)
+        visible = dists <= self.radar_range_m
+        if not np.any(visible):
             return feat
-        local_order = visible_global[np.argsort(all_dists[visible_global])[:self.num_nearest]]
-        write_slot = 0
-        for gidx in local_order:
-            if not self._obs_owned_mask[gidx]:
-                continue
-            lidx = self._global_to_local_idx[gidx]
-            if lidx < 0 or lidx >= len(self.visited) or self.visited[lidx]:
-                continue
-            if write_slot >= self.num_nearest:
-                break
-            d = float(np.clip(all_dists[gidx] / max(self.radius, 1.0), 0.0, 1.0))
-            angle = float(np.arctan2(all_diffs[gidx, 1], all_diffs[gidx, 0]))
-            base = write_slot * 3
-            feat[base] = d
-            feat[base + 1] = np.sin(angle)
-            feat[base + 2] = np.cos(angle)
-            write_slot += 1
+        pts = pts[visible]
+        diffs = diffs[visible]
+        dists = dists[visible]
+
+        k     = min(self.num_nearest, len(dists))
+        order = np.argsort(dists)[:k]
+
+        for i, j in enumerate(order):
+            d     = float(np.clip(dists[j] / self.radar_range_m, 0.0, 1.0))
+            angle = float(np.arctan2(diffs[j, 1], diffs[j, 0]))
+            feat[i * 3]     = d
+            feat[i * 3 + 1] = np.sin(angle)
+            feat[i * 3 + 2] = np.cos(angle)
 
         return feat
 
@@ -777,7 +716,7 @@ class UAVFireEnv(gym.Env):
         order = visible[np.argsort(dists[visible])[:self.MAX_TRACKED_BIRDS]]
         vmax = max(self.BIRD_SPEED_M_S, 1.0)
         for i, idx in enumerate(order):
-            dx, dy = diffs[idx] / max(self.radius, 1.0)
+            dx, dy = diffs[idx] / self.radar_range_m
             vx, vy = self._birds_vel[idx] / vmax
             feat[i * 4: i * 4 + 4] = np.clip([dx, dy, vx, vy], -1.0, 1.0)
         return feat

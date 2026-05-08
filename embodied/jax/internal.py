@@ -2,7 +2,6 @@ import concurrent.futures
 import math
 import os
 import string
-import re
 
 import elements
 import jax
@@ -31,7 +30,6 @@ def setup(
     num_processes=1,
     coordinator_address=None,
     compilation_cache=True,
-    xla_gpu_enable_command_buffer=None,
 ):
   platform and jax.config.update('jax_platforms', platform)
   jax.config.update('jax_disable_most_optimizations', debug)
@@ -53,7 +51,7 @@ def setup(
     elements.Path(xladump).mkdir()
     xlaflags.append(f'--xla_dump_to={xladump}')
     xlaflags.append('--xla_dump_hlo_as_long_text')
-  if gpuflags and platform in ('gpu', 'cuda'):
+  if gpuflags and platform == 'gpu':
     # xla_flags.append('--xla_gpu_enable_latency_hiding_scheduler=true')
     # xla_flags.append('--xla_gpu_enable_async_all_gather=true')
     # xla_flags.append('--xla_gpu_enable_async_reduce_scatter=true')
@@ -79,13 +77,6 @@ def setup(
         '--xla_gpu_graph_level=0',
         '--xla_gpu_reduce_scatter_combine_threshold_bytes=67108864',
     ]
-  if (
-      platform in ('gpu', 'cuda') and
-      xla_gpu_enable_command_buffer is not None
-  ):
-    xlaflags.append(
-        '--xla_gpu_enable_command_buffer='
-        f'{str(bool(xla_gpu_enable_command_buffer)).lower()}')
   if tpuflags and platform == 'tpu':
     xlaflags += [
         '--xla_disable_hlo_passes=rematerialization',
@@ -100,13 +91,7 @@ def setup(
         '--xla_enable_async_all_gather=true',
     ]
   if xlaflags:
-    existing = os.environ.get('XLA_FLAGS', '').strip()
-    if re.search(r'--xla_gpu_enable_command_buffer=', existing):
-      xlaflags = [x for x in xlaflags if not x.startswith(
-          '--xla_gpu_enable_command_buffer=')]
-    if xlaflags:
-      os.environ['XLA_FLAGS'] = ' '.join(
-          filter(None, [existing, ' '.join(xlaflags)])).strip()
+    os.environ['XLA_FLAGS'] = ' '.join(xlaflags)
 
   if num_processes > 1 and platform != 'tpu':
     # Note that the process_id is unrelated to the jax.process_index() that JAX
@@ -316,3 +301,4 @@ def ckpt_fn(params, compile=True):
 #       'model_node_rank': model_node_rank,
 #       'model_node_size': model_node_size,
 #   }
+
