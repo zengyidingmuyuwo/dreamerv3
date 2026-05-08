@@ -219,6 +219,11 @@ uavfire_single:
 uavfire_circle8:
   <<: *size200m
   task: uavfire_circle8
+  batch_length: 64
+  agent.imag_length: 15
+  agent.horizon: 333
+  agent.imag_loss.actent: 3e-4
+  env.uavfire.single_round_robin: False
   run: {steps: 1.1e6, envs: 1, train_ratio: 64}
 
 multicpu:

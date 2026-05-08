@@ -222,7 +222,7 @@ The output image includes:
    - SAC: `python sac_uav_circle8.py`  
    现在环境会自动先做全局 A*+TSP 规划，再给 RL “指南针向量”引导。  
 3. **DreamerV3 训练**  
-   - `python ../dreamerv3/main.py --configs uavfire --task uavfire_circle8`  
+   - `python ../dreamerv3/main.py --configs uavfire_circle8`  
    - Dreamer 输入是字典观测：`{'image': ..., 'vector': [dx, dy]}`。  
 4. **出图写论文**  
    - `python render_trajectory.py --save_path trajectory_plot.png`  
